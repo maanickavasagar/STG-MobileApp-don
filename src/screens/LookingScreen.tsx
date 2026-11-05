@@ -13,8 +13,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Linking,
 } from 'react-native';
 import ImagePicker from '../utils/SafeImagePicker';
+import ImageZoomCropModal from '../components/ImageZoomCropModal';
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -33,6 +35,7 @@ const LookingScreen = () => {
   const [activeChip, setActiveChip] = useState('All');
   const [isPostModalVisible, setPostModalVisible] = useState(false);
   const [isEditingPost, setIsEditingPost] = useState(false);
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [isYouModalVisible, setYouModalVisible] = useState(false);
   // Player form states
   const [playerDevice, setPlayerDevice] = useState('Android');
@@ -41,17 +44,43 @@ const LookingScreen = () => {
     null,
   );
   const [bannerImage, setBannerImage] = useState<string | null>(null);
+  const [tempCropImage, setTempCropImage] = useState<string | null>(null);
+  const [isCropModalVisible, setIsCropModalVisible] = useState(false);
+
   const handleImagePick = async () => {
     try {
-      const ImagePicker = require('../utils/SafeImagePicker').default;
-      const image = await ImagePicker.openPicker({
-        width: 400,
-        height: 400,
-        cropping: true,
-      });
-      setBannerImage(image.path);
+      const SafePicker = require('../utils/SafeImagePicker').default;
+      const image = await SafePicker.openPicker();
+      if (image && (image.path || image.uri)) {
+        setTempCropImage(image.path || image.uri);
+        setIsCropModalVisible(true);
+      }
+    } catch (e: any) {
+      if (e?.message !== 'User cancelled image selection') {
+        console.log('Error picking image:', e);
+      }
+    }
+  };
+
+  const openSocialLink = async (type: 'instagram' | 'youtube' | 'discord' | 'facebook', val?: string) => {
+    if (!val || !val.trim()) return;
+    let clean = val.trim();
+    let url = clean;
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      if (type === 'instagram') {
+        url = 'https://instagram.com/' + clean.replace('@', '');
+      } else if (type === 'youtube') {
+        url = clean.startsWith('@') ? 'https://youtube.com/' + clean : 'https://youtube.com/@' + clean;
+      } else if (type === 'discord') {
+        url = clean.includes('.gg/') ? 'https://' + clean : 'https://discord.gg/' + clean;
+      } else if (type === 'facebook') {
+        url = 'https://facebook.com/' + clean;
+      }
+    }
+    try {
+      await Linking.openURL(url);
     } catch (e) {
-      console.log(e);
+      Alert.alert('Link Notice', 'Could not open link: ' + url);
     }
   };
   const chips = [
@@ -72,45 +101,65 @@ const LookingScreen = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Generic form state for post
   const [formData, setFormData] = useState<any>({});
-  const currentPost = Array.isArray(myPost)
-    ? myPost.find((p: any) => p.category === activeChip)
-    : myPost?.category === activeChip
-    ? myPost
-    : null;
-  const handleEditTrigger = () => {
-    if (!currentPost) return;
+  const currentPost = React.useMemo(() => {
+    if (!myPost) return null;
+    if (Array.isArray(myPost)) {
+      if (activeChip !== 'All') {
+        const found = myPost.find((p: any) => p.category === activeChip);
+        if (found) return found;
+      }
+      return myPost[0] || null;
+    }
+    return myPost;
+  }, [myPost, activeChip]);
+  const handleEditTrigger = (postToEditParam?: any) => {
+    const postToEdit = postToEditParam || currentPost || (Array.isArray(myPost) ? myPost[0] : myPost);
+    if (!postToEdit) {
+      Alert.alert('Notice', 'No post found to edit. Please create a new post.');
+      return;
+    }
+
+    const cat = postToEdit.category || (activeChip !== 'All' ? activeChip : 'Players');
+    setActiveChip(cat);
+    setEditingPostId(postToEdit.id || null);
+
     const initialData: any = {};
-    if (currentPost.category === 'Team') {
-      initialData.teamName = currentPost.team_name || currentPost.name;
+    if (cat === 'Team') {
+      initialData.teamName = postToEdit.team_name || postToEdit.name || '';
       initialData.description =
-        currentPost.description || currentPost.looking_for_text;
-      if (currentPost.players && Array.isArray(currentPost.players)) {
-        currentPost.players.forEach((p: any, i: number) => {
-          initialData[`player${i + 1}Name`] = p.name;
-          initialData[`player${i + 1}Role`] = p.role;
+        postToEdit.description || postToEdit.looking_for_text || '';
+      if (postToEdit.players && Array.isArray(postToEdit.players)) {
+        postToEdit.players.forEach((p: any, i: number) => {
+          initialData[`player${i + 1}Name`] = p.name || '';
+          initialData[`player${i + 1}Role`] = p.role || '';
         });
       }
-    } else if (currentPost.category === 'Players') {
-      initialData.playerName = currentPost.player_name || currentPost.name;
-      initialData.role = currentPost.role;
-      initialData.experience = currentPost.experience;
-      initialData.deviceModel = currentPost.device_model;
+    } else if (cat === 'Players') {
+      initialData.playerName = postToEdit.player_name || postToEdit.name || '';
+      initialData.role = postToEdit.role || '';
+      initialData.experience = postToEdit.experience || '';
+      initialData.deviceModel = postToEdit.device_model || '';
       initialData.description =
-        currentPost.description || currentPost.looking_for_text;
-      setPlayerDevice(currentPost.device_os || '');
-      setPlayerFps(currentPost.fps || '');
-    } else if (currentPost.category === 'Organisation') {
-      initialData.orgName = currentPost.org_name || currentPost.name;
+        postToEdit.description || postToEdit.looking_for_text || '';
+      setPlayerDevice(postToEdit.device_os || 'Android');
+      setPlayerFps(postToEdit.fps || '60 FPS');
+    } else if (cat === 'Organisation') {
+      initialData.orgName = postToEdit.org_name || postToEdit.name || '';
       initialData.established =
-        currentPost.established_year || currentPost.established;
+        postToEdit.established_year || postToEdit.established || '';
       initialData.description =
-        currentPost.description || currentPost.looking_for_text;
+        postToEdit.description || postToEdit.looking_for_text || '';
     } else {
-      initialData.inGameName = currentPost.player_name || currentPost.name;
-      initialData.inGameId = currentPost.in_game_id;
+      initialData.inGameName = postToEdit.player_name || postToEdit.name || '';
+      initialData.inGameId = postToEdit.in_game_id || '';
       initialData.achievements =
-        currentPost.achievements || currentPost.looking_for_text;
+        postToEdit.achievements || postToEdit.looking_for_text || '';
     }
+    initialData.instagram = postToEdit.instagram || '';
+    initialData.youtube = postToEdit.youtube || '';
+    initialData.discord = postToEdit.discord || '';
+    initialData.facebook = postToEdit.facebook || '';
+    setBannerImage(postToEdit.banner_image || postToEdit.image || null);
     setFormData(initialData);
     setYouModalVisible(false);
     setIsEditingPost(true);
@@ -143,6 +192,43 @@ const LookingScreen = () => {
     }
   };
   const handlePostRequest = async () => {
+    // Validation: Enforce required fields for all categories
+    if (activeChip === 'Players') {
+      if (
+        !formData.playerName?.trim() ||
+        !formData.role?.trim() ||
+        !formData.deviceModel?.trim() ||
+        !formData.experience?.trim() ||
+        !formData.description?.trim()
+      ) {
+        Alert.alert(
+          'Missing Required Information',
+          'Please fill in all player details:\n• Player Name\n• My Role\n• Device Model\n• My Experience\n• Description\n\n(Social media links are optional).'
+        );
+        return;
+      }
+    } else if (activeChip === 'Team') {
+      if (!formData.teamName?.trim() || !formData.description?.trim()) {
+        Alert.alert(
+          'Missing Required Information',
+          'Please fill in all team details:\n• Team Name\n• Looking For Description\n\n(Social media links are optional).'
+        );
+        return;
+      }
+    } else if (activeChip === 'Organisation') {
+      if (
+        !formData.orgName?.trim() ||
+        !formData.established?.trim() ||
+        !formData.description?.trim()
+      ) {
+        Alert.alert(
+          'Missing Required Information',
+          'Please fill in all organisation details:\n• Org Name\n• Established Year\n• Description\n\n(Social media links are optional).'
+        );
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     try {
       let mappedData: any = {};
@@ -191,6 +277,12 @@ const LookingScreen = () => {
           achievements: formData.achievements || '',
         };
       }
+      // Attach optional social media links
+      mappedData.instagram = formData.instagram?.trim() || '';
+      mappedData.youtube = formData.youtube?.trim() || '';
+      mappedData.discord = formData.discord?.trim() || '';
+      mappedData.facebook = formData.facebook?.trim() || '';
+
       const uid = (userProfile?.id || currentUserId || '1').toString().replace('user_', '');
       const postCategory = activeChip === 'All' ? 'Players' : activeChip;
       const payload: any = {
@@ -200,57 +292,53 @@ const LookingScreen = () => {
         ...mappedData,
       };
       let endpoint = require('../api/config').API_ENDPOINTS.LOOKING_POST;
-      if (isEditingPost && currentPost && currentPost.id) {
+      const targetId = editingPostId || (isEditingPost && currentPost?.id);
+      if (isEditingPost && targetId) {
         endpoint = require('../api/config').API_ENDPOINTS.LOOKING_UPDATE;
-        payload.post_id = currentPost.id;
+        payload.post_id = targetId;
       }
+
+      const f = new FormData();
+      Object.keys(payload).forEach(k => {
+        const val = payload[k];
+        if (val !== undefined && val !== null) {
+          f.append(
+            k,
+            typeof val === 'object' ? JSON.stringify(val) : String(val),
+          );
+        }
+      });
+
       const hasLocalImage = Boolean(
         bannerImage &&
         typeof bannerImage === 'string' &&
         (bannerImage.startsWith('file://') || bannerImage.startsWith('content://'))
       );
 
-      let res;
       if (hasLocalImage) {
-        const f = new FormData();
-        Object.keys(payload).forEach(k => {
-          const val = payload[k];
-          f.append(
-            k,
-            typeof val === 'object' ? JSON.stringify(val) : String(val),
-          );
-        });
         f.append('banner_image', {
           uri: bannerImage,
           name: (activeChip === 'Players' ? 'player_' : 'logo_') + Date.now() + '.jpg',
           type: 'image/jpeg',
         } as any);
-        res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'ngrok-skip-browser-warning': 'true',
-          },
-          body: f,
-        });
-      } else {
-        if (bannerImage) {
-          payload.banner_image = bannerImage;
-        }
-        res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'ngrok-skip-browser-warning': 'true',
-          },
-          body: JSON.stringify(payload),
-        });
+      } else if (bannerImage) {
+        f.append('banner_image', bannerImage);
       }
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: f,
+      });
+
       const data = await res.json().catch(() => null);
       if (res.ok && data?.status !== false) {
         const wasEditing = isEditingPost;
         setIsEditingPost(false);
+        setEditingPostId(null);
         setPostModalVisible(false);
         setFormData({});
         setBannerImage(null);
@@ -373,9 +461,16 @@ const LookingScreen = () => {
             {activeChip !== 'All' && (
               <TouchableOpacity
                 style={styles.postBtn}
-                onPress={() => setPostModalVisible(true)}
+                onPress={() => {
+                  setIsEditingPost(false);
+                  setEditingPostId(null);
+                  setFormData({});
+                  setBannerImage(null);
+                  setPlayerDevice('Android');
+                  setPlayerFps('60 FPS');
+                  setPostModalVisible(true);
+                }}
               >
-                
                 <Icon name="add-circle" size={16} color="#FFFFFF" />
                 <Text style={styles.postBtnText}>Post</Text>
               </TouchableOpacity>
@@ -794,10 +889,46 @@ const LookingScreen = () => {
                   </View>
                 )}
                 <View style={styles.cardFooter}>
-                  
                   <Text style={styles.footerTime}>
                     {card.postedAgo || card.posted_ago}
                   </Text>
+                  
+                  {/* Social media links */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    {card.instagram ? (
+                      <TouchableOpacity
+                        style={{ padding: 4, marginHorizontal: 2 }}
+                        onPress={() => openSocialLink('instagram', card.instagram)}
+                      >
+                        <Icon name="logo-instagram" size={17} color="#E1306C" />
+                      </TouchableOpacity>
+                    ) : null}
+                    {card.youtube ? (
+                      <TouchableOpacity
+                        style={{ padding: 4, marginHorizontal: 2 }}
+                        onPress={() => openSocialLink('youtube', card.youtube)}
+                      >
+                        <Icon name="logo-youtube" size={17} color="#FF0000" />
+                      </TouchableOpacity>
+                    ) : null}
+                    {card.discord ? (
+                      <TouchableOpacity
+                        style={{ padding: 4, marginHorizontal: 2 }}
+                        onPress={() => openSocialLink('discord', card.discord)}
+                      >
+                        <Icon name="logo-discord" size={17} color="#5865F2" />
+                      </TouchableOpacity>
+                    ) : null}
+                    {card.facebook ? (
+                      <TouchableOpacity
+                        style={{ padding: 4, marginHorizontal: 2 }}
+                        onPress={() => openSocialLink('facebook', card.facebook)}
+                      >
+                        <Icon name="logo-facebook" size={17} color="#1877F2" />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+
                   <View style={styles.footerRight}>
                     
                     {card.category === 'Organisation' ? (
@@ -862,6 +993,7 @@ const LookingScreen = () => {
         presentationStyle="pageSheet"
         onRequestClose={() => {
           setIsEditingPost(false);
+          setEditingPostId(null);
           setPostModalVisible(false);
           setFormData({});
           setBannerImage(null);
@@ -898,6 +1030,7 @@ const LookingScreen = () => {
               <TouchableOpacity
                 onPress={() => {
                   setIsEditingPost(false);
+                  setEditingPostId(null);
                   setPostModalVisible(false);
                   setFormData({});
                   setBannerImage(null);
@@ -1633,6 +1766,68 @@ const LookingScreen = () => {
                       <Text style={styles.modalCharCount}>0/200</Text>
                     </>
                   )}
+                  {/* Social Media Links (Optional) */}
+                  <View style={{ marginTop: 20, marginBottom: 15, borderTopWidth: 1, borderTopColor: '#E5E7EB', paddingTop: 15 }}>
+                    <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#111827', marginBottom: 4 }}>
+                      Social Media Links <Text style={{ fontSize: 12, fontWeight: 'normal', color: '#6B7280' }}>(Optional)</Text>
+                    </Text>
+                    <Text style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 12 }}>
+                      Add your social handles or links so other players can connect with you.
+                    </Text>
+
+                    <Text style={styles.modalLabel}>INSTAGRAM:</Text>
+                    <View style={styles.socialInputContainer}>
+                      <Icon name="logo-instagram" size={18} color="#E1306C" style={{ marginRight: 10 }} />
+                      <TextInput
+                        style={styles.socialInput}
+                        value={formData.instagram}
+                        onChangeText={t => setFormData({ ...formData, instagram: t })}
+                        placeholder="e.g. username or https://instagram.com/..."
+                        placeholderTextColor="#9CA3AF"
+                        autoCapitalize="none"
+                      />
+                    </View>
+
+                    <Text style={styles.modalLabel}>YOUTUBE:</Text>
+                    <View style={styles.socialInputContainer}>
+                      <Icon name="logo-youtube" size={18} color="#FF0000" style={{ marginRight: 10 }} />
+                      <TextInput
+                        style={styles.socialInput}
+                        value={formData.youtube}
+                        onChangeText={t => setFormData({ ...formData, youtube: t })}
+                        placeholder="e.g. https://youtube.com/@channel"
+                        placeholderTextColor="#9CA3AF"
+                        autoCapitalize="none"
+                      />
+                    </View>
+
+                    <Text style={styles.modalLabel}>DISCORD:</Text>
+                    <View style={styles.socialInputContainer}>
+                      <Icon name="logo-discord" size={18} color="#5865F2" style={{ marginRight: 10 }} />
+                      <TextInput
+                        style={styles.socialInput}
+                        value={formData.discord}
+                        onChangeText={t => setFormData({ ...formData, discord: t })}
+                        placeholder="e.g. https://discord.gg/... or username"
+                        placeholderTextColor="#9CA3AF"
+                        autoCapitalize="none"
+                      />
+                    </View>
+
+                    <Text style={styles.modalLabel}>FACEBOOK:</Text>
+                    <View style={styles.socialInputContainer}>
+                      <Icon name="logo-facebook" size={18} color="#1877F2" style={{ marginRight: 10 }} />
+                      <TextInput
+                        style={styles.socialInput}
+                        value={formData.facebook}
+                        onChangeText={t => setFormData({ ...formData, facebook: t })}
+                        placeholder="e.g. https://facebook.com/..."
+                        placeholderTextColor="#9CA3AF"
+                        autoCapitalize="none"
+                      />
+                    </View>
+                  </View>
+
                   {/* Post Button */}
                   <TouchableOpacity
                     style={[styles.modalSubmitBtn, isSubmitting && { opacity: 0.5 }]}
@@ -1665,6 +1860,23 @@ const LookingScreen = () => {
           </View>
         </View>
       </Modal>
+      {/* Interactive Image Zoom/Crop Modal */}
+      <ImageZoomCropModal
+        visible={isCropModalVisible}
+        imageUri={tempCropImage}
+        cropShape={activeChip === 'Players' ? 'circle' : 'square'}
+        title={activeChip === 'Players' ? 'Adjust Player Photo' : 'Adjust Logo'}
+        onApply={(croppedUri) => {
+          setBannerImage(croppedUri);
+          setIsCropModalVisible(false);
+          setTempCropImage(null);
+        }}
+        onCancel={() => {
+          setIsCropModalVisible(false);
+          setTempCropImage(null);
+        }}
+      />
+
       {/* Dropdown Modal for Device and FPS */}
       <Modal
         visible={dropdownType !== null}
@@ -1805,7 +2017,7 @@ const LookingScreen = () => {
               </Text>
               <TouchableOpacity
                 style={{ flexDirection: 'row', alignItems: 'center' }}
-                onPress={() => setYouModalVisible(false)}
+                onPress={() => handleEditTrigger(currentPost)}
               >
                 
                 <Icon name="pencil" size={14} color="#FFFFFF" />
@@ -1854,12 +2066,13 @@ const LookingScreen = () => {
                     />
                   </View>
                   {/* Name */}
-                  <View
+                  <TouchableOpacity
                     style={{
                       flexDirection: 'row',
                       alignItems: 'center',
                       marginBottom: 8,
                     }}
+                    onPress={() => handleEditTrigger(currentPost)}
                   >
                     
                     <Text
@@ -1874,10 +2087,10 @@ const LookingScreen = () => {
                     <Icon
                       name="pencil"
                       size={16}
-                      color="#6B7280"
+                      color="#E51025"
                       style={{ marginLeft: 8 }}
                     />
-                  </View>
+                  </TouchableOpacity>
                   {/* Description */}
                   <Text
                     style={{
@@ -2224,7 +2437,7 @@ const LookingScreen = () => {
                         </View>
                         <TouchableOpacity
                           style={styles.youEditBtn}
-                          onPress={handleEditTrigger}
+                          onPress={() => handleEditTrigger(currentPost)}
                         >
                           
                           <Icon
@@ -2629,6 +2842,23 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     marginTop: 4,
     marginBottom: 20,
+  },
+  socialInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 48,
+    marginBottom: 10,
+  },
+  socialInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#111827',
+    padding: 0,
   },
   modalSubmitBtn: {
     backgroundColor: '#E51025',

@@ -11,6 +11,7 @@ import ImagePicker from '../utils/SafeImagePicker';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 import { TournamentCalendarView } from '../components/TournamentCalendarView';
+import ImageZoomCropModal from '../components/ImageZoomCropModal';
 import { apiService } from '../api/index';
 
 interface Player {
@@ -21,7 +22,10 @@ interface Player {
 
 const TeamRegistrationScreen = ({ navigation, route }: any) => {
   const { tournamentId, tournamentName } = route?.params || {};
-  const { registerTeam, globalTournaments, teamRegistrations, userProfile, currentUserId } = useContext(AppContext);
+  const { registerTeam, globalTournaments, teamRegistrations, userProfile, currentUserId, addMultipleChats } = useContext(AppContext);
+  const [tempTeamBanner, setTempTeamBanner] = useState<string | null>(null);
+  const [isCropModalVisible, setIsCropModalVisible] = useState(false);
+  const [joinedGroupIndex, setJoinedGroupIndex] = useState<number | null>(null);
   const tournament = globalTournaments.find(t => t.id === tournamentId);
 
   const [teamName, setTeamName] = useState('');
@@ -118,22 +122,60 @@ const TeamRegistrationScreen = ({ navigation, route }: any) => {
 
   const handleImagePick = async () => {
     try {
-      const image = await ImagePicker.openPicker({
-        width: 500,
-        height: 500,
-        cropping: true,
-        cropperCircleOverlay: false,
-        mediaType: 'photo'
-      });
-      if (image && image.path) {
-        setTeamBanner(image.path);
+      const image = await ImagePicker.openPicker();
+      if (image && (image.path || image.uri)) {
+        setTempTeamBanner(image.path || image.uri || null);
+        setIsCropModalVisible(true);
       }
     } catch (error: any) {
-      if (error.message !== 'User cancelled image selection') {
+      if (error?.message !== 'User cancelled image selection') {
         console.error(error);
         Alert.alert('Error', 'Something went wrong while picking the image.');
       }
     }
+  };
+
+  const handleJoinGroup = async (groupNum: number) => {
+    const tourneyId = cleanTid || tournamentId;
+    const tName = tournamentName || tournament?.name || 'Tournament';
+    const groupChatId = `tourney_${tourneyId}_group_${groupNum}`;
+    const groupChat: any = {
+      id: groupChatId,
+      name: `${tName} - Group ${groupNum}`,
+      isGroup: true,
+      isTournamentGroup: true,
+      tournamentId: tourneyId,
+      tournamentName: tName,
+      groupIndex: groupNum,
+      adminName: tournament?.organiserName || 'Tournament Admin',
+      adminId: (tournament as any)?.creator_id || (tournament as any)?.user_id || 'admin',
+      lastMessage: `You joined ${tName} - Group ${groupNum}!`,
+      time: 'Just now',
+      unread: 0,
+      joinedAt: Date.now(),
+      regEndDate: tournament?.regEndDate,
+    };
+
+    if (addMultipleChats) {
+      addMultipleChats([groupChat]);
+    }
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const stored = await AsyncStorage.getItem('@user_tournament_groups');
+      const list = stored ? JSON.parse(stored) : [];
+      if (!list.find((g: any) => g.id === groupChatId)) {
+        list.push(groupChat);
+        await AsyncStorage.setItem('@user_tournament_groups', JSON.stringify(list));
+      }
+    } catch (e) {}
+
+    setJoinedGroupIndex(groupNum);
+    setHasJoinedGroup(true);
+    Alert.alert(
+      'Group Joined!',
+      `You joined ${tName} - Group ${groupNum}. You will receive all match rooms and admin announcements in your Messages!`,
+      [{ text: 'OK' }]
+    );
   };
 
   const updatePlayer = (id: string, field: 'gameId' | 'gameName', value: string) => {
@@ -165,6 +207,9 @@ const TeamRegistrationScreen = ({ navigation, route }: any) => {
     if (!slotToBook) {
       slotToBook = (existingTournamentTeams.length + 1).toString();
     }
+    const teamsPerGrp = parseInt(tournament?.teamsPerGroup || '25', 10) || 25;
+    const targetGroupNum = Math.floor((parseInt(slotToBook) - 1) / teamsPerGrp) + 1;
+    handleJoinGroup(targetGroupNum);
 
     setIsSubmitting(true);
     try {
@@ -176,7 +221,7 @@ const TeamRegistrationScreen = ({ navigation, route }: any) => {
         teamBanner,
         slot: slotToBook,
         map: 'Erangel',
-        players: players.filter(p => p.gameId.trim() && p.gameName.trim()),
+        players: players.filter(p => p.gameId.trim() && p.gameName.trim()) as any,
         user_id: currentUid,
         userId: currentUid,
         tournament: tournament
@@ -359,7 +404,7 @@ const TeamRegistrationScreen = ({ navigation, route }: any) => {
                   ]} 
                   disabled={isFull || !isActive || (isActive && hasJoinedGroup)}
                   onPress={() => {
-                    setHasJoinedGroup(true);
+                    handleJoinGroup(groupNum);
                   }}
                 >
                   {!isFull && <Icon name={isActive && hasJoinedGroup ? "checkmark" : "chatbubbles-outline"} size={16} color="#FFF" />}
@@ -395,6 +440,21 @@ const TeamRegistrationScreen = ({ navigation, route }: any) => {
           {!isSubmitting && <Icon name="arrow-forward-outline" size={20} color="#FFFFFF" style={{ marginLeft: 8 }} />}
         </TouchableOpacity>
       </KeyboardAwareScrollView>
+      <ImageZoomCropModal
+        visible={isCropModalVisible}
+        imageUri={tempTeamBanner}
+        cropShape="square"
+        title="Adjust & Crop Team Logo"
+        onApply={(croppedUri) => {
+          setTeamBanner(croppedUri);
+          setIsCropModalVisible(false);
+          setTempTeamBanner(null);
+        }}
+        onCancel={() => {
+          setIsCropModalVisible(false);
+          setTempTeamBanner(null);
+        }}
+      />
     </View>
   );
 };

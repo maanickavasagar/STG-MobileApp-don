@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ViewShot from 'react-native-view-shot';
+import Share from 'react-native-share';
 import Icon from 'react-native-vector-icons/Ionicons';
 import SafeImagePicker from '../utils/SafeImagePicker';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -23,6 +24,8 @@ import { AppContext } from '../context/AppContext';
 import { FLYER_CATEGORIES } from '../data/flyerTemplates';
 import PointCalcModal, { PointCalcData, PointCalcTeam } from '../components/PointCalcModal';
 import PointsTableOverlay from '../components/PointsTableOverlay';
+import { EsportsFlyerOverlay } from '../components/EsportsFlyerOverlay';
+import { formatSocialHandle } from '../utils/socialUtils';
 
 const DEFAULT_POINTCALC_TEAMS: PointCalcTeam[] = [
   { id: '1', rank: 1, name: 'SOUL', matches: 1, wwcd: 1, placePts: 10, kills: 14, totalPts: 24 },
@@ -185,6 +188,18 @@ const TournamentFlyerEditScreen = ({ route, navigation }: any) => {
   if (!defaultData.subName) {
     defaultData.subName = 'FINALS';
   }
+  if (!defaultData.prizePool) {
+    defaultData.prizePool = draftTournament?.prize || '₹50,000';
+  }
+  if (!defaultData.totalSlots) {
+    defaultData.totalSlots = String(draftTournament?.totalSlots || '250');
+  }
+  if (!defaultData.teamsPerGroup) {
+    defaultData.teamsPerGroup = String(draftTournament?.teamsPerGroup || '18');
+  }
+  if (!defaultData.dates) {
+    defaultData.dates = draftTournament?.matchDate || (draftTournament?.regStartDate ? `${draftTournament?.regStartDate} - ${draftTournament?.regEndDate}` : 'STARTS SOON');
+  }
 
   const [data, setData] = useState({
     ...defaultData,
@@ -193,13 +208,17 @@ const TournamentFlyerEditScreen = ({ route, navigation }: any) => {
     ...(specificData?.data || {}),
   });
 
-  const [imageAspectRatio, setImageAspectRatio] = useState(1);
+  const [imageAspectRatio, setImageAspectRatio] = useState(0.8);
   useEffect(() => {
+    if (selectedTemplate?.category === 'Coming Soon') {
+      setImageAspectRatio(0.8);
+      return;
+    }
     if (typeof selectedTemplate.image === 'string') {
       Image.getSize(
         selectedTemplate.image,
         (width, height) => setImageAspectRatio(width / height),
-        () => setImageAspectRatio(1)
+        () => setImageAspectRatio(0.8)
       );
     } else if (selectedTemplate.image) {
       const source = Image.resolveAssetSource(selectedTemplate.image);
@@ -207,7 +226,7 @@ const TournamentFlyerEditScreen = ({ route, navigation }: any) => {
         setImageAspectRatio(source.width / source.height);
       }
     }
-  }, [selectedTemplate.image]);
+  }, [selectedTemplate?.image, selectedTemplate?.category]);
 
   const [eventLogo, setEventLogo] = useState<string | null>(
     specificData.eventLogo !== undefined
@@ -278,7 +297,8 @@ const TournamentFlyerEditScreen = ({ route, navigation }: any) => {
   };
 
   const handleSocialChange = (network: 'instagram' | 'youtube' | 'discord' | 'website', val: string) => {
-    const nextSocials = { ...socials, [network]: val };
+    const formatted = formatSocialHandle(network, val);
+    const nextSocials = { ...socials, [network]: formatted };
     setSocials(nextSocials);
     syncToGlobal(data, eventLogo, nextSocials, pointCalcData);
   };
@@ -308,6 +328,30 @@ const TournamentFlyerEditScreen = ({ route, navigation }: any) => {
     setPointCalcData(newData);
     setIsPointCalcModalVisible(false);
     syncToGlobal(data, eventLogo, socials, newData);
+  };
+
+    const handleShareFlyer = async () => {
+    try {
+      if (viewShotRef.current) {
+        setIsCapturing(true);
+        setTimeout(async () => {
+          try {
+            const uri = await viewShotRef.current.capture();
+            setIsCapturing(false);
+            await Share.open({
+              url: uri,
+              title: data.eventName || 'Tournament Flyer',
+              message: `Check out ${data.eventName || 'the tournament'}! Organized by ${data.organiserName || 'STG'}`,
+            });
+          } catch (err) {
+            setIsCapturing(false);
+          }
+        }, 150);
+      }
+    } catch (e) {
+      setIsCapturing(false);
+      Alert.alert('Error', 'Unable to share flyer at this moment.');
+    }
   };
 
   const handleContinue = () => {
@@ -387,93 +431,30 @@ const TournamentFlyerEditScreen = ({ route, navigation }: any) => {
                   style={styles.flyerImage}
                 />
 
-                {/* If Points Table / Event Calculation: Render PointCalc Esports Overlay */}
-                {isPointTableCategory ? (
-                  <View style={StyleSheet.absoluteFill}>
-                    <PointsTableOverlay
-                      teams={pointCalcData.teams}
-                      eventName={data.eventName || draftTournament?.name || 'STG OP CHAMPIONSHIP'}
-                      subName={data.subName || 'MATCH OVERALL STANDINGS'}
-                      matchInfo={pointCalcData.matchNumber}
-                      mapName={pointCalcData.mapName}
-                    />
-                  </View>
-                ) : (
-                  <>
-                    {/* Draggable Event Logo */}
-                    {eventLogo ? (
-                      <DraggableImage initialX={'75%'} initialY={'6%'} uri={eventLogo} size={48} isCapturing={isCapturing} />
-                    ) : null}
-
-                    {/* Standard Flyer Text Overlays */}
-                    {data.eventName ? (
-                      <DraggableText
-                        initialX={'20%'}
-                        initialY={'28%'}
-                        text={data.eventName}
-                        isCapturing={isCapturing}
-                        style={styles.overlayEventName}
-                      />
-                    ) : null}
-
-                    {data.organiserName ? (
-                      <DraggableText
-                        initialX={'25%'}
-                        initialY={'36%'}
-                        text={`ORGANISED BY: ${data.organiserName}`}
-                        isCapturing={isCapturing}
-                        style={styles.overlayOrganiser}
-                      />
-                    ) : null}
-
-                    {data.subName ? (
-                      <DraggableText
-                        initialX={'30%'}
-                        initialY={'22%'}
-                        text={data.subName}
-                        isCapturing={isCapturing}
-                        style={styles.overlaySubName}
-                      />
-                    ) : null}
-
-                    {/* Render any additional template-specific fields */}
-                    {(selectedTemplate.fields || []).map((field: any) => {
-                      if (['eventName', 'organiserName', 'subName'].includes(field.name)) return null;
-                      if (!data[field.name]) return null;
-                      return (
-                        <DraggableText
-                          key={field.name}
-                          initialX={field.x || '25%'}
-                          initialY={field.y || '50%'}
-                          text={data[field.name]}
-                          isCapturing={isCapturing}
-                          style={{
-                            color: field.color || '#FFFFFF',
-                            fontSize: field.fontSize || 16,
-                            fontWeight: field.fontWeight || '800',
-                            textShadowColor: 'rgba(0,0,0,0.8)',
-                            textShadowOffset: { width: 1, height: 1 },
-                            textShadowRadius: 3,
-                          }}
-                        />
-                      );
-                    })}
-
-                    {/* Draggable Social Overlays at Bottom */}
-                    {socials.instagram ? (
-                      <DraggableSocial initialX={'12%'} initialY={'88%'} text={socials.instagram} iconName="logo-instagram" isCapturing={isCapturing} />
-                    ) : null}
-                    {socials.youtube ? (
-                      <DraggableSocial initialX={'42%'} initialY={'88%'} text={socials.youtube} iconName="logo-youtube" isCapturing={isCapturing} />
-                    ) : null}
-                    {socials.discord ? (
-                      <DraggableSocial initialX={'70%'} initialY={'88%'} text={socials.discord} iconName="logo-discord" isCapturing={isCapturing} />
-                    ) : null}
-                    {socials.website ? (
-                      <DraggableSocial initialX={'30%'} initialY={'93%'} text={socials.website} iconName="globe-outline" isCapturing={isCapturing} />
-                    ) : null}
-                  </>
-                )}
+                {/* Dedicated High-End Esports Auto-Fitted Overlay for All Categories */}
+                <EsportsFlyerOverlay
+                  category={selectedTemplate.category}
+                  organiserName={data.organiserName}
+                  eventName={data.eventName}
+                  subName={data.subName}
+                  eventLogo={eventLogo}
+                  socials={{
+                    instagram: formatSocialHandle('instagram', socials.instagram),
+                    youtube: formatSocialHandle('youtube', socials.youtube),
+                    discord: formatSocialHandle('discord', socials.discord),
+                  }}
+                  pointCalcData={pointCalcData}
+                  fieldsData={{
+                    ...data,
+                    stages: draftTournament?.stages || [
+                      { title: 'Qualifier' },
+                      { title: 'Semi final' },
+                      { title: 'Finals' },
+                      { title: 'Grand final' }
+                    ]
+                  }}
+                  isThumbnail={false}
+                />
               </View>
             </ViewShot>
           </View>
@@ -590,6 +571,51 @@ const TournamentFlyerEditScreen = ({ route, navigation }: any) => {
               </View>
             </View>
 
+            {/* Prize Pool */}
+            <View style={styles.inputItem}>
+              <Text style={styles.fieldLabel}>Prize Pool</Text>
+              <View style={styles.cleanInputBox}>
+                <Icon name="trophy-outline" size={17} color="#F59E0B" style={styles.inputLeftIcon} />
+                <TextInput
+                  style={styles.cleanInput}
+                  placeholder="e.g. ₹50,000"
+                  placeholderTextColor="#9CA3AF"
+                  value={data.prizePool}
+                  onChangeText={val => handleFieldChange('prizePool', val)}
+                />
+              </View>
+            </View>
+
+            {/* Slots & Dates Row */}
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <View style={[styles.inputItem, { flex: 1 }]}>
+                <Text style={styles.fieldLabel}>Total Slots</Text>
+                <View style={styles.cleanInputBox}>
+                  <Icon name="people-outline" size={17} color="#3B82F6" style={styles.inputLeftIcon} />
+                  <TextInput
+                    style={styles.cleanInput}
+                    placeholder="e.g. 250"
+                    placeholderTextColor="#9CA3AF"
+                    value={data.totalSlots}
+                    onChangeText={val => handleFieldChange('totalSlots', val)}
+                  />
+                </View>
+              </View>
+              <View style={[styles.inputItem, { flex: 1 }]}>
+                <Text style={styles.fieldLabel}>Match Dates</Text>
+                <View style={styles.cleanInputBox}>
+                  <Icon name="calendar-outline" size={17} color="#10B981" style={styles.inputLeftIcon} />
+                  <TextInput
+                    style={styles.cleanInput}
+                    placeholder="e.g. Dec 10 - 20"
+                    placeholderTextColor="#9CA3AF"
+                    value={data.dates}
+                    onChangeText={val => handleFieldChange('dates', val)}
+                  />
+                </View>
+              </View>
+            </View>
+
             {/* Template Specific Additional Fields (if any) */}
             {(selectedTemplate.fields || [])
               .filter((f: any) => !['eventName', 'organiserName', 'subName'].includes(f.name))
@@ -674,11 +700,25 @@ const TournamentFlyerEditScreen = ({ route, navigation }: any) => {
             </View>
           </View>
 
-          {/* Action Button */}
-          <TouchableOpacity style={styles.continueBtn} onPress={handleContinue} activeOpacity={0.85}>
-            <Text style={styles.continueBtnText}>Continue</Text>
-            <Icon name="arrow-forward" size={20} color="#FFFFFF" style={{ marginLeft: 8 }} />
-          </TouchableOpacity>
+          {/* Action Buttons Row */}
+          <View style={{ flexDirection: 'row', gap: 12, marginTop: 10 }}>
+            <TouchableOpacity
+              style={[styles.continueBtn, { flex: 1, backgroundColor: '#059669', marginTop: 0 }]}
+              onPress={handleShareFlyer}
+              activeOpacity={0.85}
+            >
+              <Icon name="share-social-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+              <Text style={styles.continueBtnText}>Download / Share</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.continueBtn, { flex: 1, marginTop: 0 }]}
+              onPress={handleContinue}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.continueBtnText}>Continue</Text>
+              <Icon name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
+          </View>
         </View>
       </KeyboardAwareScrollView>
 

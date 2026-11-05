@@ -1,4 +1,4 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   Platform,
   ImageBackground,
   ScrollView,
+  Keyboard,
+  TouchableWithoutFeedback, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView } from 'react-native';
@@ -27,8 +29,28 @@ const LoginScreen = ({ navigation }: any) => {
   const [step, setStep] = useState(1);
   const [mobile, setMobile] = useState('');
   const [otp, setOtp] = useState('');
+  const [receivedOtp, setReceivedOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isKeyboardVisible, setKeyboardVisible] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
+
+  const isTyping = isKeyboardVisible || isInputFocused;
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setKeyboardVisible(true)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const handleSendOtp = async () => {
     if (mobile.length !== 10) { setError('Enter a valid 10-digit mobile number'); return; }
@@ -37,10 +59,16 @@ const LoginScreen = ({ navigation }: any) => {
       const response = await apiService.sendOtp(mobile);
       if (response.status === true || response.status === 'success' || response.success) {
         setStep(2);
+        if (response.otp) {
+          setReceivedOtp(String(response.otp));
+          Alert.alert('Verification Code', 'Your OTP is: ' + response.otp);
+        }
       } else {
         setError(response.message || 'Failed to send OTP');
       }
-    } catch { setError('Network Error. Could not reach server.'); }
+    } catch (err: any) {
+      setError(err?.message || 'Network Error. Could not reach server.');
+    }
     setLoading(false);
   };
 
@@ -55,39 +83,50 @@ const LoginScreen = ({ navigation }: any) => {
         const profileExists = await loginUser(userId);
         if (profileExists) { navigation.replace('MainTabs'); }
         else { navigation.replace('PlayerDetails', { userId, mobileNumber: mobile }); }
-      } else { setError(response.message || 'Invalid OTP'); }
-    } catch { setLoading(false); setError('Network Error. Could not reach server.'); }
+      } else {
+        setError(response.message || 'Invalid OTP');
+      }
+    } catch (err: any) {
+      setLoading(false);
+      setError(err?.message || 'Network Error. Could not reach server.');
+    }
   };
-
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
       {/* ── FULL SCREEN HERO IMAGE ── */}
-      <ImageBackground
-        source={require('../assets/images/upmi_login_hero.jpg')}
-        style={styles.hero}
-        resizeMode="cover"
-      >
-        {/* UPMI badge top-left */}
-        <View style={[styles.logoRow, { marginTop: insets.top + 12 }]}>
-          <View style={styles.logoBadge}>
-            <Text style={styles.logoBadgeText}>U</Text>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <ImageBackground
+          source={require('../assets/images/upmi_login_hero.jpg')}
+          style={[
+            styles.hero,
+            isTyping && { height: Math.max(insets.top + 60, 80) }
+          ]}
+          resizeMode="cover"
+        >
+          {/* UPMI badge top-left */}
+          <View style={[styles.logoRow, { marginTop: insets.top > 0 ? insets.top + 8 : 14 }]}>
+            <View style={styles.logoBadge}>
+              <Text style={styles.logoBadgeText}>U</Text>
+            </View>
+            <View style={{ marginLeft: 10 }}>
+              <Text style={styles.logoTitle}>UPMI</Text>
+              <Text style={styles.logoSub}>BATTLEGROUNDS MOBILE INDIA</Text>
+            </View>
           </View>
-          <View style={{ marginLeft: 10 }}>
-            <Text style={styles.logoTitle}>UPMI</Text>
-            <Text style={styles.logoSub}>BATTLEGROUNDS MOBILE INDIA</Text>
-          </View>
-        </View>
 
-        {/* Bottom text overlaid on image */}
-        <View style={styles.heroTextBlock}>
-          <Text style={styles.heroSquad}>SQUAD UP</Text>
-          <Text style={styles.heroDominate}>DOMINATE TOGETHER</Text>
-          <Text style={styles.heroTagline}>Play. Connect. Climb Ranks.</Text>
-          <View style={styles.heroUnderline} />
-        </View>
-      </ImageBackground>
+          {/* Bottom text overlaid on image */}
+          {!isTyping && (
+            <View style={styles.heroTextBlock}>
+              <Text style={styles.heroSquad}>SQUAD UP</Text>
+              <Text style={styles.heroDominate}>DOMINATE TOGETHER</Text>
+              <Text style={styles.heroTagline}>Play. Connect. Climb Ranks.</Text>
+              <View style={styles.heroUnderline} />
+            </View>
+          )}
+        </ImageBackground>
+      </TouchableWithoutFeedback>
 
       {/* ── WHITE BOTTOM SHEET ── */}
       <KeyboardAvoidingView
@@ -95,9 +134,10 @@ const LoginScreen = ({ navigation }: any) => {
         style={styles.sheet}
       >
         <ScrollView
-          contentContainerStyle={{ flexGrow: 1 }}
+          contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
+          bounces={false}
         >
         {/* pill */}
         <View style={styles.pillRow}>
@@ -124,6 +164,8 @@ const LoginScreen = ({ navigation }: any) => {
                 keyboardType="number-pad"
                 maxLength={10}
                 value={mobile}
+                onFocus={() => setIsInputFocused(true)}
+                onBlur={() => setIsInputFocused(false)}
                 onChangeText={(t) => { setMobile(t.replace(/[^0-9]/g, '')); setError(''); }}
               />
             </View>
@@ -144,6 +186,26 @@ const LoginScreen = ({ navigation }: any) => {
               Verify <Text style={{ color: colors.primary }}>OTP</Text>
             </Text>
             <Text style={styles.welcomeSub}>Code sent to +91 {mobile}</Text>
+            {receivedOtp ? (
+              <TouchableOpacity
+                onPress={() => { setOtp(receivedOtp); setError(''); }}
+                style={{
+                  alignSelf: 'center',
+                  marginTop: 6,
+                  marginBottom: 6,
+                  backgroundColor: 'rgba(230, 34, 34, 0.12)',
+                  paddingHorizontal: 12,
+                  paddingVertical: 5,
+                  borderRadius: 8,
+                  borderWidth: 1,
+                  borderColor: 'rgba(230, 34, 34, 0.25)',
+                }}
+              >
+                <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '700' }}>
+                  Tap to Fill OTP: {receivedOtp}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
 
             <TextInput
               style={styles.otpInput}
@@ -152,6 +214,8 @@ const LoginScreen = ({ navigation }: any) => {
               keyboardType="number-pad"
               maxLength={6}
               value={otp}
+              onFocus={() => setIsInputFocused(true)}
+              onBlur={() => setIsInputFocused(false)}
               onChangeText={(t) => { setOtp(t.replace(/[^0-9]/g, '')); setError(''); }}
             />
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -178,7 +242,22 @@ const LoginScreen = ({ navigation }: any) => {
           </>
         )}
 
-        <Text style={styles.termsText}>By continuing, you agree to our Terms & Privacy Policy</Text>
+        <Text style={styles.termsText}>
+          By continuing, you agree to our{' '}
+          <Text
+            style={styles.termsLink}
+            onPress={() => navigation.navigate('PolicyScreen', { title: 'Terms of Service' })}
+          >
+            Terms
+          </Text>
+          {' & '}
+          <Text
+            style={styles.termsLink}
+            onPress={() => navigation.navigate('PolicyScreen', { title: 'Privacy Policy' })}
+          >
+            Privacy Policy
+          </Text>
+        </Text>
 
         <TouchableOpacity onPress={() => {
           setUserProfile({
@@ -205,7 +284,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#1a1a1a',
   },
   hero: {
-    height: height * 0.50,
+    height: height * 0.48,
     justifyContent: 'space-between',
   },
   heroDarkOverlay: {
@@ -291,19 +370,23 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingHorizontal: 24,
-    paddingTop: 18,
+    paddingTop: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.15,
     shadowRadius: 12,
     elevation: 20,
   },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 24,
+  },
   pillRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    marginBottom: 18,
+    marginBottom: 12,
   },
   pill: {
     height: 5,
@@ -313,13 +396,13 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '800',
     color: '#111827',
-    marginBottom: 5,
+    marginBottom: 4,
     textAlign: 'center',
   },
   welcomeSub: {
     fontSize: 14,
     color: '#6B7280',
-    marginBottom: 22,
+    marginBottom: 14,
     textAlign: 'center',
   },
   phoneRow: {
@@ -335,7 +418,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 14,
-    paddingVertical: 16,
+    paddingVertical: 14,
     borderRightWidth: 1,
     borderRightColor: '#E5E7EB',
   },
@@ -346,10 +429,10 @@ const styles = StyleSheet.create({
   },
   phoneInput: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 16,
     color: '#111827',
     paddingHorizontal: 14,
-    paddingVertical: 16,
+    paddingVertical: 14,
   },
   otpInput: {
     borderWidth: 1,
@@ -357,7 +440,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     fontSize: 24,
     color: '#111827',
-    paddingVertical: 16,
+    paddingVertical: 14,
     fontWeight: 'bold',
     textAlign: 'center',
     letterSpacing: 10,
@@ -376,9 +459,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.primary,
     borderRadius: 50,
-    paddingVertical: 17,
+    paddingVertical: 15,
     marginTop: 4,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   loginBtnText: {
     color: '#FFFFFF',
@@ -389,7 +472,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
     borderRadius: 50,
-    paddingVertical: 15,
+    paddingVertical: 14,
     alignItems: 'center',
     marginBottom: 8,
   },
@@ -403,12 +486,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
+  termsLink: {
+    color: colors.primary,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
   termsText: {
     textAlign: 'center',
     color: '#9CA3AF',
     fontSize: 12,
     lineHeight: 18,
-    marginTop: 18,
+    marginTop: 14,
   },
   guestText: {
     color: colors.primary,

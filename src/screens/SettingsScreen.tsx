@@ -1,4 +1,4 @@
-﻿import React, { useContext } from 'react';
+import React, { useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -52,8 +52,8 @@ const SettingsScreen = () => {
 
         <Text style={styles.sectionTitle}>About</Text>
         <View style={styles.section}>
-          {renderItem('document-text-outline', 'Privacy Policy', '', () => navigation.navigate('PolicyScreen'))}
-          {renderItem('information-circle-outline', 'Terms of Service')}
+          {renderItem('document-text-outline', 'Privacy Policy', '', () => navigation.navigate('PolicyScreen', { title: 'Privacy Policy' }))}
+          {renderItem('information-circle-outline', 'Terms of Service', '', () => navigation.navigate('PolicyScreen', { title: 'Terms of Service' }))}
           {renderItem('help-circle-outline', 'Help & Support')}
         </View>
 
@@ -67,7 +67,7 @@ const SettingsScreen = () => {
           <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
         
-        <Text style={styles.versionText}>App Version 1.0.0</Text>
+        <Text style={styles.versionText}>App Version 2.8.4</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -92,5 +92,3 @@ const styles = StyleSheet.create({
 });
 
 export default SettingsScreen;
-
-

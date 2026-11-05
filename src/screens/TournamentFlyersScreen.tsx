@@ -1,5 +1,5 @@
 import React, { useState, useContext, useRef, useEffect, useMemo } from 'react';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 import WizardProgressIndicator from '../components/WizardProgressIndicator';
 import EventDetailsModal, { EventDetailsData } from '../components/EventDetailsModal';
+import { EsportsFlyerOverlay } from '../components/EsportsFlyerOverlay';
+import { API_ENDPOINTS } from '../api/config';
 import {
   ALL_FLYER_TEMPLATES,
   FLYER_CATEGORIES,
@@ -24,14 +26,38 @@ import {
 const { width } = Dimensions.get('window');
 
 const TournamentFlyersScreen = ({ route, navigation }: any) => {
+  const insets = useSafeAreaInsets();
   const [activeCategory, setActiveCategory] = useState(
     route.params?.activeCategory || 'Coming Soon'
   );
   const [activeTab, setActiveTab] = useState<'free' | 'pro'>('free');
   const [isEventDetailsVisible, setIsEventDetailsVisible] = useState(false);
+  const [backendFlyers, setBackendFlyers] = useState<any[]>([]);
   const categoryListRef = useRef<FlatList>(null);
 
   const { draftTournament, setDraftTournament } = useContext(AppContext);
+
+  // Fetch Coming Soon flyers dynamically from backend API
+  useEffect(() => {
+    let isMounted = true;
+    const fetchBackendFlyers = async () => {
+      try {
+        const res = await fetch(API_ENDPOINTS.FLYERS);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.status && Array.isArray(json.coming_soon) && isMounted) {
+            setBackendFlyers(json.coming_soon);
+          }
+        }
+      } catch (err) {
+        // Fallback safely to bundled offline flyers
+      }
+    };
+    fetchBackendFlyers();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Sync category scroll
   useEffect(() => {
@@ -117,8 +143,21 @@ const TournamentFlyersScreen = ({ route, navigation }: any) => {
   };
 
   const currentCategoryTemplates = useMemo(() => {
-    return ALL_FLYER_TEMPLATES.filter(t => t.category === activeCategory);
-  }, [activeCategory]);
+    const localTemplates = ALL_FLYER_TEMPLATES.filter(t => t.category === activeCategory);
+    if (activeCategory === 'Coming Soon' && backendFlyers.length > 0) {
+      return localTemplates.map((tpl, idx) => {
+        const bf = backendFlyers[idx];
+        if (bf && bf.image_url) {
+          return {
+            ...tpl,
+            image: bf.image_url,
+          };
+        }
+        return tpl;
+      });
+    }
+    return localTemplates;
+  }, [activeCategory, backendFlyers]);
 
   const renderTemplateItem = ({ item }: { item: FlyerTemplate }) => {
     const isSelected = draftTournament?.selectedFlyers?.[item.category]?.templateId === item.id;
@@ -126,8 +165,6 @@ const TournamentFlyersScreen = ({ route, navigation }: any) => {
     const imageSource = (editedUri && typeof editedUri === 'string')
       ? { uri: editedUri }
       : (typeof item.image === 'string' ? { uri: item.image } : item.image);
-
-    const showDynamicPreview = !editedUri;
 
     return (
       <TouchableOpacity
@@ -137,94 +174,30 @@ const TournamentFlyersScreen = ({ route, navigation }: any) => {
       >
         <Image source={imageSource} style={styles.templateImage} />
 
-        {/* Dynamic Overlays: Auto-Fixed across all flyers */}
-        {showDynamicPreview && (
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
-            {/* Auto-Fixed Event Logo */}
-            {currentEventLogo ? (
-              <View
-                style={[
-                  styles.autoLogoBox,
-                  {
-                    top: item.logoPos.y as any,
-                    left: item.logoPos.x as any,
-                    width: item.logoPos.size,
-                    height: item.logoPos.size,
-                    borderRadius: item.logoPos.size / 2
-                  }
-                ]}
-              >
-                <Image source={{ uri: currentEventLogo }} style={styles.autoLogoImg} />
-              </View>
-            ) : null}
-
-            {/* Template Fields */}
-            {item.fields.map(field => {
-              let textVal = '';
-              if (field.name === 'organiserName') textVal = currentOrgName;
-              else if (field.name === 'eventName') textVal = currentEventName;
-              else if (field.name === 'subName') textVal = currentSubName;
-              else textVal = field.default;
-
-              if (!textVal) return null;
-
-              return (
-                <View
-                  key={field.name}
-                  style={{
-                    position: 'absolute',
-                    top: field.y as any,
-                    left: (field.x || '10%') as any,
-                    right: '10%'
-                  }}
-                >
-                  <Text
-                    numberOfLines={1}
-                    style={{
-                      color: field.color || '#FFF',
-                      fontSize: (field.fontSize || 16) * 0.42,
-                      fontWeight: (field.fontWeight as any) || 'bold',
-                      textShadowColor: 'rgba(0,0,0,0.85)',
-                      textShadowOffset: { width: 1, height: 1 },
-                      textShadowRadius: 3
-                    }}
-                  >
-                    {textVal}
-                  </Text>
-                </View>
-              );
-            })}
-
-            {/* Auto-Fixed Socials Row */}
-            <View
-              style={[
-                styles.autoSocialsRow,
-                {
-                  top: item.socialPos.y as any,
-                  left: item.socialPos.x as any
-                }
-              ]}
-            >
-              {currentSocials.instagram ? (
-                <View style={styles.socialItem}>
-                  <Icon name="logo-instagram" size={10} color="#E1306C" />
-                  <Text style={styles.socialItemText}>@{currentSocials.instagram}</Text>
-                </View>
-              ) : null}
-              {currentSocials.youtube ? (
-                <View style={styles.socialItem}>
-                  <Icon name="logo-youtube" size={10} color="#FF0000" />
-                  <Text style={styles.socialItemText}>{currentSocials.youtube}</Text>
-                </View>
-              ) : null}
-              {currentSocials.discord ? (
-                <View style={styles.socialItem}>
-                  <Icon name="logo-discord" size={10} color="#5865F2" />
-                  <Text style={styles.socialItemText}>{currentSocials.discord}</Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
+        {/* Live Esports Auto-Layout Overlay on Thumbnail */}
+        {!editedUri && (
+          <EsportsFlyerOverlay
+            category={item.category}
+            organiserName={currentOrgName}
+            eventName={currentEventName}
+            subName={currentSubName}
+            eventLogo={currentEventLogo}
+            socials={currentSocials}
+            pointCalcData={(draftTournament as any)?.pointCalcData}
+            fieldsData={{
+              prizePool: globalFlyerData.prizePool || draftTournament?.prize || '₹50,000',
+              totalSlots: globalFlyerData.totalSlots || draftTournament?.totalSlots || '250',
+              teamsPerGroup: globalFlyerData.teamsPerGroup || draftTournament?.teamsPerGroup || '18',
+              dates: globalFlyerData.dates || draftTournament?.matchDate || (draftTournament?.regStartDate ? `${draftTournament?.regStartDate} - ${draftTournament?.regEndDate}` : 'STARTS SOON'),
+              stages: draftTournament?.stages || [
+                { title: 'Qualifier' },
+                { title: 'Semi final' },
+                { title: 'Finals' },
+                { title: 'Grand final' }
+              ]
+            }}
+            isThumbnail={true}
+          />
         )}
 
         {/* Selected Checkmark */}
@@ -408,13 +381,13 @@ const TournamentFlyersScreen = ({ route, navigation }: any) => {
             data={currentCategoryTemplates}
             keyExtractor={item => item.id}
             numColumns={2}
-            contentContainerStyle={styles.listContainer}
+            contentContainerStyle={[styles.listContainer, { paddingBottom: Math.max(insets.bottom, 24) + 90 }]}
             renderItem={renderTemplateItem}
             showsVerticalScrollIndicator={false}
           />
 
           {/* Bottom Next / Skip Navigation */}
-          <View style={styles.bottomNavContainer}>
+          <View style={[styles.bottomNavContainer, { paddingBottom: Math.max(insets.bottom, 24) + 12 }]}>
             <TouchableOpacity
               style={[
                 styles.bottomNavBtn,
@@ -616,7 +589,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
-    aspectRatio: 0.72,
+    aspectRatio: 0.8,
     position: 'relative',
     elevation: 3,
     shadowColor: '#000',

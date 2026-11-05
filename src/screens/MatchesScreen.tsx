@@ -2,13 +2,14 @@ import React, { useState, useContext, useCallback, useMemo } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  TextInput, Modal, Alert, Image, FlatList, StatusBar, Linking
+  TextInput, Modal, Alert, Image, FlatList, StatusBar, Linking, ActivityIndicator
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { colors } from '../theme/colors';
+import { formatSocialHandle } from '../utils/socialUtils';
 import { AppContext } from '../context/AppContext';
-import { apiService } from '../services/api';
+import { apiService } from '../api/index';
 
 const MatchesScreen = ({ navigation, route }: any) => {
   const insets = useSafeAreaInsets();
@@ -99,7 +100,7 @@ const MatchesScreen = ({ navigation, route }: any) => {
           slot: tr.slot || '1',
           map: 'Erangel',
           players: tr.players || []
-        });
+        } as any);
       }
     });
 
@@ -131,6 +132,66 @@ const MatchesScreen = ({ navigation, route }: any) => {
     return { all: combinedRegistrations.length, live, upcoming, completed };
   }, [combinedRegistrations]);
 
+  
+  const parseCustomDate = (dateVal: any): number | null => {
+    if (!dateVal) return null;
+    if (typeof dateVal === 'number') return dateVal;
+    const str = String(dateVal).trim();
+    if (!str) return null;
+
+    const std = Date.parse(str);
+    if (!isNaN(std)) return std;
+
+    const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+    if (dmyMatch) {
+      const day = parseInt(dmyMatch[1], 10);
+      const month = parseInt(dmyMatch[2], 10) - 1;
+      const year = parseInt(dmyMatch[3], 10);
+      const d = new Date(year, month, day, 23, 59, 59);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+
+    const dmyShortMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2})$/);
+    if (dmyShortMatch) {
+      const day = parseInt(dmyShortMatch[1], 10);
+      const month = parseInt(dmyShortMatch[2], 10) - 1;
+      const year = 2000 + parseInt(dmyShortMatch[3], 10);
+      const d = new Date(year, month, day, 23, 59, 59);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+
+    const monthNames: Record<string, number> = {
+      jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+      may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8,
+      september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
+    };
+    const textDateMatch = str.match(/(\d{1,2})(?:st|nd|rd|th)?\s*[-/,\s]\s*([A-Za-z]+)(?:\s*[-/,\s]\s*(\d{2,4}))?/i);
+    if (textDateMatch) {
+      const day = parseInt(textDateMatch[1], 10);
+      const monStr = textDateMatch[2].toLowerCase();
+      const mon = monthNames[monStr];
+      if (mon !== undefined) {
+        const year = textDateMatch[3] 
+          ? parseInt(textDateMatch[3].length === 2 ? '20' + textDateMatch[3] : textDateMatch[3], 10)
+          : new Date().getFullYear();
+        const d = new Date(year, mon, day, 23, 59, 59);
+        if (!isNaN(d.getTime())) return d.getTime();
+      }
+    }
+
+    return null;
+  };
+
+  const getSocialDisplay = (val: string, prefix = '') => {
+    if (!val) return '';
+    const network = /youtube|youtu\.be/i.test(val) ? 'youtube' : /discord/i.test(val) ? 'discord' : 'instagram';
+    let str = formatSocialHandle(network, val, prefix === '@');
+    str = str.replace(/\/$/, '');
+    if (prefix && !str.startsWith(prefix)) str = prefix + str;
+    if (str.length > 20) str = str.substring(0, 18) + '...';
+    return str;
+  };
+
   const handleSocialLink = (platform: string, link: string) => {
     if (!link) return;
     let url = link.trim();
@@ -145,38 +206,84 @@ const MatchesScreen = ({ navigation, route }: any) => {
     Linking.openURL(url).catch(() => Alert.alert('Social Link', `${platform}: ${link}`));
   };
 
-  const getStatusBadge = (statusStr?: string) => {
-    const s = String(statusStr || 'Active').toLowerCase();
-    if (s === 'live' || s === 'active' || s === 'running') {
-      return { label: 'LIVE', bg: '#E51025', dot: true };
-    }
+  const getStatusBadge = (statusStr?: string, regEnd?: string, regStart?: string) => {
+    const s = String(statusStr || '').toLowerCase().trim();
     if (s === 'completed' || s === 'closed' || s === 'finished' || s === 'ended') {
       return { label: 'CLOSED', bg: '#4B5563', dot: false };
     }
+
+    const now = Date.now();
+    const parsedEnd = parseCustomDate(regEnd);
+    if (parsedEnd && now > parsedEnd) {
+      return { label: 'CLOSED', bg: '#4B5563', dot: false };
+    }
+
+    const parsedStart = parseCustomDate(regStart);
+    if (parsedStart && now < parsedStart) {
+      return { label: 'UPCOMING', bg: '#16A34A', dot: true };
+    }
+
+    if (s === 'live' || s === 'running' || s === 'active') {
+      return { label: 'LIVE', bg: '#E51025', dot: true };
+    }
+
+    if (s === 'upcoming' || s === 'open') {
+      return { label: 'UPCOMING', bg: '#16A34A', dot: true };
+    }
+
+    if (parsedStart && parsedEnd && now >= parsedStart && now <= parsedEnd) {
+      return { label: 'LIVE', bg: '#E51025', dot: true };
+    }
+
     return { label: 'UPCOMING', bg: '#16A34A', dot: true };
   };
 
+  const [deletingTournamentId, setDeletingTournamentId] = useState<string | number | null>(null);
+
+  const isTournamentCreator = useCallback((t: any): boolean => {
+    if (!t) return false;
+    const currentUid = String(userProfile?.id || currentUserId || '').replace(/^user_|^usr_|^u_/, '').trim();
+    if (!currentUid || currentUid === 'guest') return false;
+    const creatorUid = String(t.user_id || t.userId || t.created_by || '').replace(/^user_|^usr_|^u_/, '').trim();
+    return !!creatorUid && currentUid === creatorUid;
+  }, [userProfile?.id, currentUserId]);
+
   const handleDeleteTournament = (t: any) => {
+    if (!isTournamentCreator(t)) {
+      Alert.alert('Permission Denied', 'Only the tournament creator can delete this tournament.');
+      return;
+    }
+
     Alert.alert(
       'Delete Tournament',
-      `Are you sure you want to delete "${t.name || 'this tournament'}"? This action cannot be undone.`,
+      'Are you sure you want to delete this tournament?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            const currentUid = String(userProfile?.id || currentUserId || '').replace(/^user_|^usr_|^u_/, '').trim();
+            setDeletingTournamentId(t.id);
             try {
+              const res = await apiService.deleteTournament(t.id, currentUid);
+              if (res && res.status === false) {
+                Alert.alert('Error', res.message || 'Failed to delete tournament');
+                return;
+              }
               if (deleteTournament) {
                 deleteTournament(t.id);
               }
-              setMyTournaments(prev => prev.filter(item => item.id !== t.id));
-              await apiService.deleteTournament(t.id);
-              if (fetchTournaments) fetchTournaments();
+              setMyTournaments(prev => prev.filter(item => String(item.id) !== String(t.id)));
+              if (fetchTournaments) {
+                fetchTournaments();
+              }
               Alert.alert('Success', 'Tournament deleted successfully');
-            } catch (err) {
+            } catch (err: any) {
               console.log('Error deleting tournament:', err);
-              Alert.alert('Error', 'Failed to delete tournament');
+              Alert.alert('Error', err?.message || 'Failed to delete tournament');
+            } finally {
+              setDeletingTournamentId(null);
             }
           }
         }
@@ -207,9 +314,8 @@ const MatchesScreen = ({ navigation, route }: any) => {
   };
 
   const requireLogin = (cb: () => void) => {
-    if (!userProfile || userProfile.id === 'guest') {
-      Alert.alert('Login Required', 'Please login first');
-    } else { cb(); }
+    // Seamless access for tournament organizer creation
+    cb();
   };
 
   const renderRegisteredCard = (item: any, i: number) => {
@@ -223,7 +329,7 @@ const MatchesScreen = ({ navigation, route }: any) => {
     const statusVal = item.status || tDetails.status || 'Active';
     const regStart = item.regStartDate || tDetails.regStartDate;
     const regEnd = item.regEndDate || tDetails.regEndDate || item.time || tDetails.time;
-    const statusBadge = getStatusBadge(statusVal);
+    const statusBadge = getStatusBadge(statusVal, regEnd, regStart);
     const tId = item.tournamentId || item.id;
     const insta = item.socialMedia1 || tDetails.socialMedia1;
     const yt = item.socialMedia2 || tDetails.socialMedia2;
@@ -236,26 +342,15 @@ const MatchesScreen = ({ navigation, route }: any) => {
           <View style={s.bannerContainer}>
             <Image
               source={{ uri: banner }}
-              style={[s.cardBanner, { aspectRatio: imageAspectRatios[item.id] || 16 / 9 }]}
+              style={s.cardBanner}
               resizeMode="cover"
-              onLoad={(e) => {
-                if (e.nativeEvent.source) {
-                  const { width: w, height: h } = e.nativeEvent.source;
-                  if (w && h) {
-                    const ratio = Math.min(2.1, Math.max(1.3, w / h));
-                    setImageAspectRatios(prev => ({ ...prev, [item.id]: ratio }));
-                  }
-                }
-              }}
             />
           </View>
         ) : null}
 
         {/* TOP BADGES ROW */}
         <View style={s.cardTopRow}>
-          <View style={s.gameBadge}>
-            <Text style={s.gameBadgeText}>{game}</Text>
-          </View>
+          
           <View style={s.entryBadge}>
             <Icon name="checkmark-circle" size={13} color="#16A34A" style={{ marginRight: 3 }} />
             <Text style={s.entryBadgeText}>REGISTERED</Text>
@@ -335,7 +430,7 @@ const MatchesScreen = ({ navigation, route }: any) => {
         {/* SOCIAL MEDIA ON TOURNAMENT */}
         {(insta || yt || discord) && (
           <View style={s.socialMediaRow}>
-            <Text style={s.socialMediaLabel}>Official Channels:</Text>
+            <Text style={s.socialMediaLabel}>Social Media:</Text>
             <View style={s.socialBadgesGroup}>
               {!!insta && (
                 <TouchableOpacity 
@@ -344,7 +439,7 @@ const MatchesScreen = ({ navigation, route }: any) => {
                   activeOpacity={0.7}
                 >
                   <Icon name="logo-instagram" size={13} color="#E1306C" style={{ marginRight: 4 }} />
-                  <Text style={[s.socialPillText, { color: '#E1306C' }]}>Instagram</Text>
+                  <Text style={[s.socialPillText, { color: '#E1306C' }]}>{getSocialDisplay(insta, '@') || '@stg_esports'}</Text>
                 </TouchableOpacity>
               )}
               {!!yt && (
@@ -354,7 +449,7 @@ const MatchesScreen = ({ navigation, route }: any) => {
                   activeOpacity={0.7}
                 >
                   <Icon name="logo-youtube" size={13} color="#FF0000" style={{ marginRight: 4 }} />
-                  <Text style={[s.socialPillText, { color: '#FF0000' }]}>YouTube</Text>
+                  <Text style={[s.socialPillText, { color: '#FF0000' }]}>{getSocialDisplay(yt) || 'STG Esports Live'}</Text>
                 </TouchableOpacity>
               )}
               {!!discord && (
@@ -364,7 +459,7 @@ const MatchesScreen = ({ navigation, route }: any) => {
                   activeOpacity={0.7}
                 >
                   <Icon name="logo-discord" size={13} color="#5865F2" style={{ marginRight: 4 }} />
-                  <Text style={[s.socialPillText, { color: '#5865F2' }]}>Discord</Text>
+                  <Text style={[s.socialPillText, { color: '#5865F2' }]}>{getSocialDisplay(discord) || 'Discord'}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -393,7 +488,7 @@ const MatchesScreen = ({ navigation, route }: any) => {
       {/* ── HERO HEADER ── */}
       <View style={s.heroHeader}>
         <View>
-          <Text style={s.heroTitle}>My Matches</Text>
+          <Text style={s.heroTitle}>Matches</Text>
           <Text style={s.heroSub}>
             {activeTab === 'Matches' ? 'Your Registered Tournaments & Scrims' : 'Tournaments Organized By You'}
           </Text>
@@ -419,9 +514,7 @@ const MatchesScreen = ({ navigation, route }: any) => {
               color={activeTab === 'Matches' ? '#fff' : '#6B7280'}
               style={{ marginRight: 6 }}
             />
-            <Text style={[s.segText, activeTab === 'Matches' && s.segTextActive]}>
-              My Matches
-            </Text>
+            <Text style={[s.segText, activeTab === 'Matches' && s.segTextActive]}>Matches</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -479,95 +572,93 @@ const MatchesScreen = ({ navigation, route }: any) => {
                   <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>Create</Text>
                 </TouchableOpacity>
               </View>
-              {myTournaments.map((t, i) => (
-                <View key={t.id || i} style={s.card}>
-                  {t.bannerImage ? (
-                    <View style={s.bannerContainer}>
-                      <Image
-                        source={{ uri: t.bannerImage }}
-                        style={[s.cardBanner, { aspectRatio: imageAspectRatios[t.id] || 16 / 9 }]}
-                        resizeMode="cover"
-                        onLoad={(e) => {
-                          const { width: w, height: h } = e.nativeEvent.source;
-                          if (w && h) setImageAspectRatios(p => ({ ...p, [t.id]: w / h }));
-                        }}
-                      />
-                    </View>
-                  ) : null}
+              {myTournaments.map((t, i) => {
+                const isCreator = isTournamentCreator(t);
+                const isDeleting = deletingTournamentId === t.id;
+                const slotVal = t.teams_per_group || t.teamsPerGroup || t.teams_limit || t.teamsLimit || '25';
 
-                  {/* SLOT LIST BUTTON RIGHT BELOW POSTER */}
-                  <TouchableOpacity 
-                    style={s.slotListBannerBtn} 
-                    onPress={() => navigation.navigate('RegisteredTeams', { tournamentId: t.id, tournamentName: t.name, tournament: t })}
-                    activeOpacity={0.85}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Icon name="grid" size={16} color="#E51025" style={{ marginRight: 8 }} />
-                      <Text style={s.slotListBannerBtnText}>Slot List & Flyer</Text>
-                    </View>
-                    <View style={s.slotListTag}>
-                      <Text style={s.slotListTagText}>25 Slots / Group</Text>
-                      <Icon name="chevron-forward" size={14} color="#E51025" />
-                    </View>
-                  </TouchableOpacity>
-
-                  <View style={s.cardTopRow}>
-                    <View style={s.gameBadge}><Text style={s.gameBadgeText}>{t.game || 'BGMI'}</Text></View>
-                    <View style={[s.statusBadge, { backgroundColor: t.status === 'upcoming' ? '#16A34A' : '#E51025' }]}>
-                      <Text style={s.statusText}>{(t.status || 'OPEN').toUpperCase()}</Text>
-                    </View>
-                  </View>
-                  <Text style={s.orgName}>{(t.organiser_name || t.organiserName || 'UPMI Esports').toUpperCase()}</Text>
-                  <Text style={s.tournamentName}>{t.name}</Text>
-                  {t.time ? <Text style={s.cardSub}><Icon name="time-outline" size={12} color="#6B7280" /> {t.time}</Text> : null}
-
-                  <View style={s.prizePill}>
-                    <View style={s.prizeLeft}>
-                      <View style={s.trophyIconBox}>
-                        <Icon name="trophy" size={16} color="#D97706" />
+                return (
+                  <View key={t.id || i} style={s.card}>
+                    {t.bannerImage ? (
+                      <View style={s.bannerContainer}>
+                        <Image
+                          source={{ uri: t.bannerImage }}
+                          style={s.cardBanner}
+                          resizeMode="cover"
+                        />
                       </View>
-                      <View>
-                        <Text style={s.prizeLabel}>PRIZE POOL</Text>
-                        <Text style={s.prizeText}>{t.prize || 'TBD'}</Text>
+                    ) : null}
+
+                    {/* TOP STATUS ROW */}
+                    <View style={s.cardTopRow}>
+                      <View style={[s.statusBadge, { backgroundColor: t.status === 'upcoming' ? '#16A34A' : '#E51025' }]}>
+                        <Text style={s.statusText}>{(t.status || 'OPEN').toUpperCase()}</Text>
                       </View>
                     </View>
-                    <View style={s.slotsChip}>
-                      <Icon name="people" size={13} color="#9CA3AF" style={{ marginRight: 5 }} />
-                      <Text style={s.slotsText}>{t.teams_limit || t.teamsLimit || 25} Slots</Text>
+
+                    <Text style={s.orgName}>{(t.organiser_name || t.organiserName || 'UPMI Esports').toUpperCase()}</Text>
+                    <Text style={s.tournamentName}>{t.name}</Text>
+                    {t.time ? <Text style={s.cardSub}><Icon name="time-outline" size={12} color="#6B7280" /> {t.time}</Text> : null}
+
+                    {/* TOURNAMENT INFO BAR: PRIZE POOL (LEFT) & SLOTS (RIGHT) */}
+                    <View style={s.prizePill}>
+                      <View style={s.prizeLeft}>
+                        <View style={s.trophyIconBox}>
+                          <Icon name="trophy" size={16} color="#D97706" />
+                        </View>
+                        <View style={{ flexShrink: 1 }}>
+                          <Text style={s.prizeLabel}>PRIZE POOL</Text>
+                          <Text style={s.prizeText} numberOfLines={1}>{t.prize || 'TBD'}</Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity 
+                        style={s.slotsGroupChip}
+                        activeOpacity={0.7}
+                        onPress={() => navigation.navigate('RegisteredTeams', { tournamentId: t.id, tournamentName: t.name, tournament: t })}
+                      >
+                        <Icon name="people" size={14} color="#E51025" style={{ marginRight: 5 }} />
+                        <Text style={s.slotsGroupText}>{slotVal} Slots / Group</Text>
+                        <Icon name="chevron-forward" size={13} color="#E51025" style={{ marginLeft: 3 }} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={s.actionRow}>
+                      <TouchableOpacity 
+                        style={[s.actionBtnPrimary, { flex: 1.2, backgroundColor: '#E51025' }]} 
+                        onPress={() => navigation.navigate('RegisteredTeams', { tournamentId: t.id, tournamentName: t.name, tournament: t })}
+                      >
+                        <Icon name="grid-outline" size={14} color="#FFF" style={{ marginRight: 4 }} />
+                        <Text style={s.actionBtnPrimaryText}>Slot List</Text>
+                      </TouchableOpacity>
+                      {isCreator && (
+                        <TouchableOpacity 
+                          style={[s.actionBtnOutline, { flex: 1 }]} 
+                          onPress={() => handleEditTournament(t)}
+                        >
+                          <Icon name="pencil-outline" size={14} color="#374151" style={{ marginRight: 4 }} />
+                          <Text style={s.actionBtnOutlineText}>Edit</Text>
+                        </TouchableOpacity>
+                      )}
+                      {isCreator && (
+                        <TouchableOpacity 
+                          style={[s.actionBtnOutline, { flex: 1, borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' }]} 
+                          onPress={() => handleDeleteTournament(t)}
+                          disabled={isDeleting}
+                        >
+                          {isDeleting ? (
+                            <ActivityIndicator size="small" color="#DC2626" />
+                          ) : (
+                            <>
+                              <Icon name="trash-outline" size={14} color="#DC2626" style={{ marginRight: 4 }} />
+                              <Text style={[s.actionBtnOutlineText, { color: '#DC2626', fontWeight: '700' }]}>Delete</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      )}
                     </View>
                   </View>
-
-                  <View style={s.actionRow}>
-                    <TouchableOpacity 
-                      style={[s.actionBtnPrimary, { flex: 1.3, backgroundColor: '#E51025' }]} 
-                      onPress={() => navigation.navigate('RegisteredTeams', { tournamentId: t.id, tournamentName: t.name, tournament: t })}
-                    >
-                      <Icon name="grid-outline" size={14} color="#FFF" style={{ marginRight: 4 }} />
-                      <Text style={s.actionBtnPrimaryText}>Slot List</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={[s.actionBtnOutline, { flex: 1 }]} 
-                      onPress={() => navigation.navigate('RegisteredTeams', { tournamentId: t.id, tournamentName: t.name, tournament: t })}
-                    >
-                      <Text style={s.actionBtnOutlineText}>Details</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={[s.actionBtnOutline, { flex: 0.8 }]} 
-                      onPress={() => handleEditTournament(t)}
-                    >
-                      <Icon name="pencil-outline" size={14} color="#374151" style={{ marginRight: 4 }} />
-                      <Text style={s.actionBtnOutlineText}>Edit</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={[s.actionBtnOutline, { flex: 0.85, borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' }]} 
-                      onPress={() => handleDeleteTournament(t)}
-                    >
-                      <Icon name="trash-outline" size={14} color="#DC2626" style={{ marginRight: 4 }} />
-                      <Text style={[s.actionBtnOutlineText, { color: '#DC2626', fontWeight: '700' }]}>Delete</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))}
+                );
+              })}
             </>
           ) : (
             /* Empty state ── Tournaments */
@@ -646,8 +737,8 @@ const s = StyleSheet.create({
     backgroundColor: '#fff', borderRadius: 20, padding: 16, marginBottom: 16,
     shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.08, shadowRadius: 14, elevation: 4,
   },
-  bannerContainer: { width: '100%', borderRadius: 14, overflow: 'hidden', marginBottom: 12 },
-  cardBanner: { width: '100%', minHeight: 160 },
+  bannerContainer: { width: '100%', height: 160, borderRadius: 14, overflow: 'hidden', marginBottom: 12 },
+  cardBanner: { width: '100%', height: '100%' },
   cardTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   gameBadge: { backgroundColor: '#FEF2F2', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, borderWidth: 1, borderColor: '#FEE2E2' },
   gameBadgeText: { color: colors.primary, fontSize: 11, fontWeight: '800' },
@@ -750,6 +841,33 @@ const s = StyleSheet.create({
   socialPillText: { fontSize: 11, fontWeight: '700' },
 
   /* SLOT LIST BANNER BTN */
+  cardDeleteIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECDD3',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  slotsGroupChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF1F2',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#FECDD3',
+    flexShrink: 0,
+    marginLeft: 8,
+  },
+  slotsGroupText: {
+    color: '#E51025',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   slotListBannerBtn: {
     flexDirection: 'row',
     alignItems: 'center',

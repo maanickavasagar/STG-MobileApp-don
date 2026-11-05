@@ -7,7 +7,7 @@ import HomeScreen from '../screens/HomeScreen';
 import LookingScreen from '../screens/LookingScreen';
 import CommunityScreen from '../screens/CommunityScreen';
 import MatchesScreen from '../screens/MatchesScreen';
-import { StoreScreen } from '../screens/PlaceholderScreens';
+import StoreScreen from '../screens/StoreScreen';
 import GlobalHeader from '../components/GlobalHeader';
 import CustomDrawer from '../components/CustomDrawer';
 import { colors } from '../theme/colors';

@@ -10,6 +10,7 @@ import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 import { Calendar } from 'react-native-calendars';
 import WizardProgressIndicator from '../components/WizardProgressIndicator';
+import ImageZoomCropModal from '../components/ImageZoomCropModal';
 
 const TOURNAMENT_TYPES = ['Solo', 'Duo', 'Squad'];
 const MAPS = ['Erangel', 'Miramar', 'Sanhok', 'Vikendi'];
@@ -167,7 +168,8 @@ const PointRow = ({ label, value, onChange, placeholder }: any) => {
 
 const CreateTournamentScreen = ({ route, navigation }: any) => {
   const { isEdit, tournament } = route?.params || {};
-  const { addMultipleChats } = useContext(AppContext);
+  const { addMultipleChats, userProfile, currentUserId, chats, notifyNewMessage } = useContext(AppContext);
+  const [stageQualifiedTeams, setStageQualifiedTeams] = useState<Record<number, string>>({});
   const [killsPoint, setKillsPoint] = useState<number | string>(1);
   const [positions, setPositions] = useState<{label: string, value: number | string}[]>(
     Array.from({ length: 25 }, (_, i) => {
@@ -198,6 +200,38 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
   const [teamsPerGroup, setTeamsPerGroup] = useState('26');
   const [numberOfGroups, setNumberOfGroups] = useState('');
   const [groupsGenerated, setGroupsGenerated] = useState(false);
+  const [stageGroupConfigs, setStageGroupConfigs] = useState<{
+    [stageIndex: number]: {
+      totalTeams: string;
+      teamsPerGroup: string;
+      numberOfGroups: string;
+      isCreated: boolean;
+    };
+  }>({});
+
+  const getStageConfig = (index: number) => {
+    if (stageGroupConfigs[index]) return stageGroupConfigs[index];
+    const defTotal = index === 0 ? (totalSlots || '250') : index === 1 ? '36' : '18';
+    const defPerGroup = teamsPerGroup || '18';
+    const num = Math.ceil(parseInt(defTotal) / parseInt(defPerGroup)) || 1;
+    return {
+      totalTeams: defTotal,
+      teamsPerGroup: defPerGroup,
+      numberOfGroups: String(num),
+      isCreated: false,
+    };
+  };
+
+  const updateStageConfig = (index: number, field: 'totalTeams' | 'teamsPerGroup', val: string) => {
+    const current = getStageConfig(index);
+    const updated = { ...current, [field]: val };
+    const tot = parseInt(updated.totalTeams);
+    const per = parseInt(updated.teamsPerGroup);
+    if (!isNaN(tot) && !isNaN(per) && per > 0) {
+      updated.numberOfGroups = String(Math.ceil(tot / per));
+    }
+    setStageGroupConfigs(prev => ({ ...prev, [index]: updated }));
+  };
   const [regStartDate, setRegStartDate] = useState('');
   const [regEndDate, setRegEndDate] = useState('');
   const [matchDatesObj, setMatchDatesObj] = useState<any>({});
@@ -225,6 +259,8 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
   const [maxTeams, setMaxTeams] = useState('');
   const [rules, setRules] = useState('');
   const [bannerImage, setBannerImage] = useState<string | null>(null);
+  const [tempBannerImage, setTempBannerImage] = useState<string | null>(null);
+  const [isCropModalVisible, setIsCropModalVisible] = useState(false);
   const [roadmap, setRoadmap] = useState(ROADMAPS[0]);
 
   const [activeModal, setActiveModal] = useState<string | null>(null);
@@ -269,25 +305,220 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
     setShowPicker(true);
   };
 
-  const handleGenerateGroups = () => {
-    const num = parseInt(numberOfGroups);
-    if (!isNaN(num) && num > 0) {
-      const newChats = [];
+
+  const handleAutoAddQualifiedTeams = (stageIndex: number) => {
+    const raw = stageQualifiedTeams[stageIndex] || '';
+    const teamList = raw.split(/[,\n]+/).map(t => t.trim()).filter(Boolean);
+    const stageTitle = stages[stageIndex]?.title || `Stage ${stageIndex + 1}`;
+
+    if (teamList.length === 0) {
+      Alert.alert('Qualified Teams', 'Please enter at least one team name or username to advance.');
+      return;
+    }
+
+    const cfg = getStageConfig(stageIndex);
+    if (!cfg.isCreated) {
+      Alert.alert('Create Groups First', `Please click "Create Groups for ${stageTitle}" above before adding qualified teams.`);
+      return;
+    }
+
+    // Distribute teams across the groups for this stage
+    const tourneyId = tournament?.id || `tourney_${Date.now()}`;
+    const num = parseInt(cfg.numberOfGroups) || 1;
+    const stageSlug = stageTitle.toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+    const updated = [...(chats || [])];
+    teamList.forEach((team, tIdx) => {
+      const targetGroupNum = (tIdx % num) + 1;
+      const targetGroupId = `${tourneyId}_${stageSlug}_group_${targetGroupNum}`;
+      const chatIdx = updated.findIndex(c => c.id === targetGroupId);
+      if (chatIdx !== -1) {
+        const existingMembers = updated[chatIdx].members || [];
+        if (!existingMembers.some(m => m.name.toLowerCase() === team.toLowerCase())) {
+          updated[chatIdx] = {
+            ...updated[chatIdx],
+            joinedTeams: (updated[chatIdx].joinedTeams || 0) + 1,
+            members: [
+              ...existingMembers,
+              {
+                id: `member_${Date.now()}_${tIdx}`,
+                name: team,
+                avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(team)}`,
+                role: 'member'
+              }
+            ]
+          };
+        }
+      }
+    });
+    addMultipleChats(updated);
+
+    Alert.alert('Success', `${teamList.length} qualified teams successfully added directly to ${stageTitle} groups!`);
+  };
+
+  const handleSendQualifiedInvites = (stageIndex: number) => {
+    const raw = stageQualifiedTeams[stageIndex] || '';
+    const teamList = raw.split(/[,\n]+/).map(t => t.trim()).filter(Boolean);
+    const stageTitle = stages[stageIndex]?.title || `Stage ${stageIndex + 1}`;
+    const tName = tournamentName?.trim() || 'Tournament';
+
+    if (teamList.length === 0) {
+      Alert.alert('Qualified Teams', 'Please enter at least one team name or username to send invites.');
+      return;
+    }
+
+    const cfg = getStageConfig(stageIndex);
+    if (!cfg.isCreated) {
+      Alert.alert('Create Groups First', `Please click "Create Groups for ${stageTitle}" above before dispatching group invites.`);
+      return;
+    }
+
+    if (notifyNewMessage) {
+      notifyNewMessage(
+        '🏆 Stage Advancement Invite',
+        `Congratulations ${teamList.join(', ')}! You qualified for ${stageTitle} in ${tName}! Tap to join your group.`,
+        'InboxScreen'
+      );
+    }
+
+    Alert.alert(
+      'Invites Dispatched',
+      `Group join invitations sent to ${teamList.length} qualified teams (${teamList.join(', ')}) with one-click access to ${stageTitle} groups!`
+    );
+  };
+
+  const handleGenerateStageGroups = async (stageIndex: number) => {
+    const stage = stages[stageIndex];
+    const cfg = getStageConfig(stageIndex);
+    const num = parseInt(cfg.numberOfGroups);
+    if (isNaN(num) || num <= 0) {
+      Alert.alert('Error', 'Please enter valid slots and teams per group.');
+      return;
+    }
+
+    const tourneyId = tournament?.id || `tourney_${Date.now()}`;
+    const tName = tournamentName?.trim() || 'Tournament';
+    const stageTitle = stage?.title?.trim() || `Round ${stageIndex + 1}`;
+    const perGroup = parseInt(cfg.teamsPerGroup) || 18;
+    const stageSlug = stageTitle.toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+    const newChats = [];
+    const baseTime = Date.now();
+    for (let i = 1; i <= num; i++) {
+      newChats.push({
+        id: `${tourneyId}_${stageSlug}_group_${i}`,
+        name: `${stageTitle} - Group ${i}`,
+        description: `Official Group for ${stageTitle} - Group ${i}. Admin announcements only.`,
+        tournamentId: tourneyId,
+        tournamentName: tName,
+        stageName: stageTitle,
+        groupIndex: i,
+        maxTeams: perGroup,
+        joinedTeams: 0,
+        regEndDate: regEndDate,
+        grandFinalsDate: getMatchDateRange() || regEndDate,
+        isTournamentGroup: true,
+        isUserCreated: true,
+        isGroup: true,
+        adminId: userProfile?.id || currentUserId || 'admin',
+        adminName: userProfile?.username || organiserName || 'Tournament Organiser',
+        lastMessage: `Official Group for ${stageTitle}. Admin announcements only.`,
+        time: 'Just now',
+        createdAt: baseTime + (num - i),
+        updatedAt: baseTime + (num - i),
+        timestamp: baseTime + (num - i),
+        unread: 0,
+      });
+    }
+
+    addMultipleChats(newChats);
+
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const existingIdsRes = await AsyncStorage.getItem('user_created_group_ids');
+      const existingIds = existingIdsRes ? JSON.parse(existingIdsRes) : [];
+      const newIds = newChats.map(c => c.id);
+      const combinedIds = Array.from(new Set([...existingIds, ...newIds]));
+      await AsyncStorage.setItem('user_created_group_ids', JSON.stringify(combinedIds));
+      await AsyncStorage.setItem(`@tournament_groups_${tourneyId}`, JSON.stringify(newChats));
+    } catch (e) {}
+
+    setStageGroupConfigs(prev => ({
+      ...prev,
+      [stageIndex]: { ...cfg, isCreated: true }
+    }));
+
+    Alert.alert('Success', `${num} Groups created for ${stageTitle} in Messages!`);
+  };
+
+  const handleGenerateAllStageGroups = async () => {
+    const tourneyId = tournament?.id || `tourney_${Date.now()}`;
+    const tName = tournamentName?.trim() || 'Tournament';
+    const allNewChats: any[] = [];
+    const newStageConfigs = { ...stageGroupConfigs };
+
+    stages.forEach((stage, stageIndex) => {
+      const cfg = getStageConfig(stageIndex);
+      const num = parseInt(cfg.numberOfGroups);
+      if (isNaN(num) || num <= 0) return;
+      const stageTitle = stage?.title?.trim() || `Round ${stageIndex + 1}`;
+      const perGroup = parseInt(cfg.teamsPerGroup) || 18;
+      const stageSlug = stageTitle.toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+      const baseTime = Date.now();
       for (let i = 1; i <= num; i++) {
-        newChats.push({
-          id: Date.now().toString() + i,
-          name: `Group ${i}`,
-          lastMessage: `Welcome to Group ${i}!`,
+        allNewChats.push({
+          id: `${tourneyId}_${stageSlug}_group_${i}`,
+          name: `${stageTitle} - Group ${i}`,
+          description: `Official Group for ${stageTitle} - Group ${i}. Admin announcements only.`,
+          tournamentId: tourneyId,
+          tournamentName: tName,
+          stageName: stageTitle,
+          groupIndex: i,
+          maxTeams: perGroup,
+          joinedTeams: 0,
+          regEndDate: regEndDate,
+          grandFinalsDate: getMatchDateRange() || regEndDate,
+          isTournamentGroup: true,
+          isUserCreated: true,
+          isGroup: true,
+          adminId: userProfile?.id || currentUserId || 'admin',
+          adminName: userProfile?.username || organiserName || 'Tournament Organiser',
+          lastMessage: `Official Group for ${stageTitle}. Admin announcements only.`,
           time: 'Just now',
+          createdAt: baseTime + (num - i),
+          updatedAt: baseTime + (num - i),
+          timestamp: baseTime + (num - i),
           unread: 0,
-          isGroup: true
         });
       }
-      addMultipleChats(newChats);
-      setGroupsGenerated(true);
-      Alert.alert('Success', `${num} groups created successfully!`);
+      newStageConfigs[stageIndex] = { ...cfg, isCreated: true };
+    });
+
+    if (allNewChats.length === 0) {
+      Alert.alert('Error', 'No groups could be generated. Check your stage slot numbers.');
+      return;
     }
+
+    addMultipleChats(allNewChats);
+
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const existingIdsRes = await AsyncStorage.getItem('user_created_group_ids');
+      const existingIds = existingIdsRes ? JSON.parse(existingIdsRes) : [];
+      const newIds = allNewChats.map(c => c.id);
+      const combinedIds = Array.from(new Set([...existingIds, ...newIds]));
+      await AsyncStorage.setItem('user_created_group_ids', JSON.stringify(combinedIds));
+      await AsyncStorage.setItem(`@tournament_groups_${tourneyId}`, JSON.stringify(allNewChats));
+    } catch (e) {}
+
+    setStageGroupConfigs(newStageConfigs);
+    setGroupsGenerated(true);
+
+    Alert.alert('Success', `All ${allNewChats.length} Tournament Groups created in Messages!`);
   };
+
+  const handleGenerateGroups = handleGenerateAllStageGroups;
 
   const getPickerValue = () => {
     if (pickerMode === 'time' && currentDateField === 'matchTime' && matchTime) {
@@ -316,18 +547,15 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
 
   const handleImagePick = async () => {
     try {
-      const image = await ImagePicker.openPicker({
-        cropping: true,
-        mediaType: 'photo',
-        freeStyleCropEnabled: true,
-      });
-      if (image && image.path) {
-        setBannerImage(image.path);
+      const image = await ImagePicker.openPicker();
+      if (image && (image.path || image.uri)) {
+        setTempBannerImage(image.path || image.uri || null);
+        setIsCropModalVisible(true);
       }
     } catch (error: any) {
-      if (error.message !== 'User cancelled image selection') {
+      if (error?.message !== 'User cancelled image selection') {
         console.error(error);
-        Alert.alert('Error', 'Something went wrong');
+        Alert.alert('Error', 'Something went wrong picking image');
       }
     }
   };
@@ -347,7 +575,14 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
       if (tournament.regStartDate) setRegStartDate(tournament.regStartDate);
       if (tournament.regEndDate) setRegEndDate(tournament.regEndDate);
       if (tournament.matchDatesObj) setMatchDatesObj(tournament.matchDatesObj);
-      if (tournament.stages) setStages(tournament.stages);
+      if (tournament.stages) {
+        setStages(tournament.stages);
+        const initialQ: Record<number, string> = {};
+        tournament.stages.forEach((st: any, i: number) => {
+          if (st.qualifiedTeams) initialQ[i] = st.qualifiedTeams;
+        });
+        setStageQualifiedTeams(initialQ);
+      }
     }
   }, [isEdit, tournament]);
 
@@ -370,7 +605,7 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
   };
 
   const handleCreate = () => {
-    const formatYYYYMMDDLocal = (ds) => {
+    const formatYYYYMMDDLocal = (ds: any) => {
       if (!ds) return "";
       const d = new Date(ds);
       const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -385,7 +620,11 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
       } else if (datesForStage.length > 1) {
         dateStr = `${formatYYYYMMDDLocal(datesForStage[0])} - ${formatYYYYMMDDLocal(datesForStage[datesForStage.length - 1])}`;
       }
-      return { ...UPMI, date: dateStr };
+      return {
+        ...UPMI,
+        date: dateStr,
+        qualifiedTeams: stageQualifiedTeams[idx] || (UPMI as any).qualifiedTeams || ''
+      };
     });
     if (currentStep === 1) {
       if (!tournamentName.trim()) {
@@ -448,9 +687,26 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
       regStartDate,
       regEndDate,
       bannerImage,
+      eventLogo: bannerImage,
       killsPoint: String(killsPoint),
       positions: positions,
-        rules: rules
+      rules: rules,
+      globalFlyerData: {
+        eventName: tournamentName || 'STG OP CHAMPIONSHIP',
+        organiserName: organiserName || 'STG ESPORTS',
+        subName: 'COMING SOON',
+        prizePool: prizePool || '₹50,000',
+        totalSlots: totalSlots || '250',
+        teamsPerGroup: teamsPerGroup || '18',
+        dates: getMatchDateRange() || (regStartDate ? `${regStartDate} - ${regEndDate}` : 'Starting Soon'),
+        eventLogo: bannerImage,
+        socials: {
+          instagram: socialMedia1 || '',
+          youtube: socialMedia2 || '',
+          discord: socialMedia3 || '',
+          website: socialMedia4 || ''
+        }
+      }
     });
 
     Alert.alert('Success', 'Tournament Details Saved!');
@@ -740,33 +996,222 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
         )}
 
         {currentStep === 2 && (
-          <View style={{ flex: 1, paddingVertical: 20 }}>
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Total Slots</Text>
-              <TextInput style={styles.input} placeholder="e.g. 100" placeholderTextColor="#757575" value={totalSlots} onChangeText={setTotalSlots} keyboardType="numeric" />
+          <View style={{ flex: 1, paddingVertical: 10 }}>
+            {/* Header info */}
+            <View style={{ marginBottom: 14 }}>
+              <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#111827' }}>
+                Tournament Rounds & Groups Setup
+              </Text>
+              <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                Configure slots and teams per group for each round. Groups will be automatically created in Messages.
+              </Text>
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Teams per Group</Text>
-              <TextInput style={styles.input} placeholder="e.g. 26" placeholderTextColor="#757575" value={teamsPerGroup} onChangeText={setTeamsPerGroup} keyboardType="numeric" />
-            </View>
+            {/* Stages Group Setup Cards */}
+            {stages.map((stage, idx) => {
+              const cfg = getStageConfig(idx);
+              const num = parseInt(cfg.numberOfGroups) || 0;
+              return (
+                <View
+                  key={idx}
+                  style={{
+                    backgroundColor: '#FFFFFF',
+                    borderRadius: 14,
+                    padding: 14,
+                    marginBottom: 14,
+                    borderWidth: 1,
+                    borderColor: cfg.isCreated ? '#10B981' : '#E5E7EB',
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 1 },
+                    shadowOpacity: 0.05,
+                    shadowRadius: 3,
+                    elevation: 2,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: cfg.isCreated ? '#10B981' : '#E51025', justifyContent: 'center', alignItems: 'center', marginRight: 8 }}>
+                        <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 12 }}>{idx + 1}</Text>
+                      </View>
+                      <View>
+                        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#111827' }}>{stage.title}</Text>
+                        <Text style={{ fontSize: 11, color: '#6B7280' }}>
+                          {stage.date ? `Date: ${stage.date}` : `Stage ${idx + 1}`}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={{ backgroundColor: cfg.isCreated ? '#DEF7EC' : '#FEF3C7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 }}>
+                      <Text style={{ fontSize: 11, fontWeight: 'bold', color: cfg.isCreated ? '#03543F' : '#92400E' }}>
+                        {cfg.isCreated ? '✓ Created' : `${num} Groups`}
+                      </Text>
+                    </View>
+                  </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Number of Groups</Text>
-              <TextInput style={[styles.input, { backgroundColor: '#F3F4F6' }]} placeholder="Auto-calculated" placeholderTextColor="#757575" value={numberOfGroups} editable={false} />
-            </View>
+                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.label, { fontSize: 11 }]}>Total Slots</Text>
+                      <TextInput
+                        style={[styles.input, { height: 42, fontSize: 13 }]}
+                        placeholder="e.g. 250"
+                        placeholderTextColor="#9CA3AF"
+                        value={cfg.totalTeams}
+                        onChangeText={val => updateStageConfig(idx, 'totalTeams', val)}
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.label, { fontSize: 11 }]}>Teams/Group</Text>
+                      <TextInput
+                        style={[styles.input, { height: 42, fontSize: 13 }]}
+                        placeholder="e.g. 18"
+                        placeholderTextColor="#9CA3AF"
+                        value={cfg.teamsPerGroup}
+                        onChangeText={val => updateStageConfig(idx, 'teamsPerGroup', val)}
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.label, { fontSize: 11 }]}>Groups</Text>
+                      <View style={[styles.input, { height: 42, backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center' }]}>
+                        <Text style={{ fontWeight: 'bold', color: '#111827', fontSize: 14 }}>{cfg.numberOfGroups || '0'}</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Group Names Preview Banner */}
+                  <View style={{ backgroundColor: '#F9FAFB', padding: 7, borderRadius: 6, marginBottom: 10 }}>
+                    <Text style={{ fontSize: 11, color: '#4B5563' }}>
+                      Names: <Text style={{ fontWeight: 'bold', color: '#111827' }}>{stage.title} Group 1 ... {stage.title} Group {cfg.numberOfGroups || '1'}</Text>
+                    </Text>
+                  </View>
+
+                  {/* Stage Group Create Button */}
+                  <TouchableOpacity
+                    style={{
+                      backgroundColor: cfg.isCreated ? '#10B981' : '#E51025',
+                      paddingVertical: 10,
+                      borderRadius: 8,
+                      alignItems: 'center',
+                    }}
+                    onPress={() => handleGenerateStageGroups(idx)}
+                  >
+                    <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 13 }}>
+                      {cfg.isCreated ? `✓ ${stage.title} Groups Created (${num})` : `Create ${num} Groups for ${stage.title}`}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Stage Advancement & Qualified Teams Box (for round 2 onwards: Semi Finals, Finals, etc.) */}
+                  {idx > 0 && (
+                    <View style={{
+                      marginTop: 14,
+                      backgroundColor: '#F8FAFC',
+                      borderRadius: 10,
+                      padding: 12,
+                      borderWidth: 1,
+                      borderColor: '#CBD5E1',
+                      borderLeftWidth: 4,
+                      borderLeftColor: '#F59E0B'
+                    }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                        <Icon name="trophy" size={16} color="#D97706" style={{ marginRight: 6 }} />
+                        <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#1E293B' }}>
+                          🎯 Advance Qualified Teams to {stage.title}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 11, color: '#64748B', marginBottom: 8, lineHeight: 15 }}>
+                        Select or enter usernames of teams qualified from previous matches. Auto-add directly to groups or send invite join links.
+                      </Text>
+
+                      <TextInput
+                        style={{
+                          backgroundColor: '#FFFFFF',
+                          borderWidth: 1,
+                          borderColor: '#E2E8F0',
+                          borderRadius: 6,
+                          padding: 8,
+                          fontSize: 12,
+                          color: '#1E293B',
+                          minHeight: 46,
+                          textAlignVertical: 'top',
+                          marginBottom: 8
+                        }}
+                        placeholder="e.g. TEAM SOUL, GODLIKE, BLIND ESPORTS, TEAM XSPARK..."
+                        placeholderTextColor="#94A3B8"
+                        multiline
+                        value={stageQualifiedTeams[idx] || ''}
+                        onChangeText={text => setStageQualifiedTeams(prev => ({ ...prev, [idx]: text }))}
+                      />
+
+                      {/* Quick preset suggestions */}
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 10 }}>
+                        {['+ SOUL', '+ GODLIKE', '+ BLIND', '+ GLOBAL'].map(team => (
+                          <TouchableOpacity
+                            key={team}
+                            onPress={() => {
+                              const curr = stageQualifiedTeams[idx] || '';
+                              const clean = team.replace('+ ', '');
+                              if (!curr.includes(clean)) {
+                                setStageQualifiedTeams(prev => ({
+                                  ...prev,
+                                  [idx]: curr ? `${curr}, ${clean}` : clean
+                                }));
+                              }
+                            }}
+                            style={{
+                              backgroundColor: '#E2E8F0',
+                              paddingHorizontal: 7,
+                              paddingVertical: 3,
+                              borderRadius: 4
+                            }}
+                          >
+                            <Text style={{ fontSize: 10, color: '#334155', fontWeight: '600' }}>{team}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+
+                      {/* Dual Action Buttons: Direct Add & Send Invite */}
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity
+                          onPress={() => handleAutoAddQualifiedTeams(idx)}
+                          style={{
+                            flex: 1,
+                            backgroundColor: '#059669',
+                            paddingVertical: 8,
+                            paddingHorizontal: 8,
+                            borderRadius: 6,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
+                        >
+                          <Icon name="person-add" size={13} color="#FFFFFF" style={{ marginRight: 4 }} />
+                          <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: 'bold' }}>Direct Add</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          onPress={() => handleSendQualifiedInvites(idx)}
+                          style={{
+                            flex: 1,
+                            backgroundColor: '#0284C7',
+                            paddingVertical: 8,
+                            paddingHorizontal: 8,
+                            borderRadius: 6,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
+                        >
+                          <Icon name="send" size={13} color="#FFFFFF" style={{ marginRight: 4 }} />
+                          <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: 'bold' }}>Send Invites</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+
             
-            {numberOfGroups !== '' && parseInt(numberOfGroups) > 0 && (
-              <TouchableOpacity 
-                style={{ backgroundColor: groupsGenerated ? '#10B981' : '#F59E0B', padding: 12, borderRadius: 8, alignItems: 'center', marginBottom: 20 }}
-                onPress={handleGenerateGroups}
-                disabled={groupsGenerated}
-              >
-                <Text style={{ color: '#FFF', fontWeight: 'bold' }}>
-                  {groupsGenerated ? `${numberOfGroups} Groups Created!` : `Click OK to create ${numberOfGroups} groups instantly`}
-                </Text>
-              </TouchableOpacity>
-            )}
 
             {/* --- Point System UI --- */}
             <View style={{ marginBottom: 20, marginTop: 10 }}>
@@ -909,6 +1354,22 @@ const CreateTournamentScreen = ({ route, navigation }: any) => {
           </KeyboardAwareScrollView>
         </SafeAreaView>
       </Modal>
+
+      <ImageZoomCropModal
+        visible={isCropModalVisible}
+        imageUri={tempBannerImage}
+        cropShape="square"
+        title="Adjust & Crop Tournament Logo"
+        onApply={(croppedUri) => {
+          setBannerImage(croppedUri);
+          setIsCropModalVisible(false);
+          setTempBannerImage(null);
+        }}
+        onCancel={() => {
+          setIsCropModalVisible(false);
+          setTempBannerImage(null);
+        }}
+      />
 
       {showPicker && (
         <DateTimePicker

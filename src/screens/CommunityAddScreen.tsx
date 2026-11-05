@@ -43,11 +43,41 @@ const CommunityAddScreen = () => {
   const [ownerDiscord, setOwnerDiscord] = useState(existingPost?.ownerDiscord || existingPost?.owner_discord || '');
   const [ownerWebsite, setOwnerWebsite] = useState(existingPost?.ownerWebsite || existingPost?.owner_website || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [targetPostId, setTargetPostId] = useState<string | null>(existingPost?.id || null);
+    const [targetPostId, setTargetPostId] = useState<string | null>(existingPost?.id || null);
   const effectiveIsEdit = isEdit || !!targetPostId;
 
+  const populateFromPost = (p: any) => {
+    if (!p) return;
+    setTargetPostId(p.id || null);
+    if (p.logo) setLogo(p.logo);
+    if (p.postedBy || p.posted_by) setUsername(p.postedBy || p.posted_by);
+    if (p.name) setName(p.name);
+    if (p.orgName || p.org_name) setOrgName(p.orgName || p.org_name);
+    if (p.ownerName || p.owner_name) setOwnerName(p.ownerName || p.owner_name);
+    if (p.experience || p.lanExperience) setExperience(p.experience || p.lanExperience);
+    if (p.since) setSince(p.since);
+    if (p.description) setDescription(p.description);
+    if (p.previousWork || p.previous_work) setPreviousWork(p.previousWork || p.previous_work);
+    if (p.achievements) setAchievements(p.achievements);
+    if (p.overallPlayers || p.overall_players) setOverallPlayers(p.overallPlayers || p.overall_players);
+    if (p.youtube) setYoutube(p.youtube);
+    if (p.instagram) setInstagram(p.instagram);
+    if (p.discord) setDiscord(p.discord);
+    if (p.website) setWebsite(p.website);
+    if (p.ownerYoutube || p.owner_youtube) setOwnerYoutube(p.ownerYoutube || p.owner_youtube);
+    if (p.ownerInstagram || p.owner_instagram) setOwnerInstagram(p.ownerInstagram || p.owner_instagram);
+    if (p.ownerDiscord || p.owner_discord) setOwnerDiscord(p.ownerDiscord || p.owner_discord);
+    if (p.ownerWebsite || p.owner_website) setOwnerWebsite(p.ownerWebsite || p.owner_website);
+  };
+
   useEffect(() => {
-    if (!isEdit && !targetPostId) {
+    if (existingPost) {
+      populateFromPost(existingPost);
+    }
+  }, [existingPost, route.params]);
+
+  useEffect(() => {
+    if (!isEdit && !targetPostId && !existingPost) {
       const checkExisting = async () => {
         try {
           const apiPosts = await apiService.getCommunityPosts(category);
@@ -71,25 +101,7 @@ const CommunityAddScreen = () => {
                 'You already have a post in this category. You can only edit your existing post.',
                 [{ text: 'OK' }]
               );
-              setTargetPostId(found.id);
-              if (found.logo) setLogo(found.logo);
-              if (found.name) setName(found.name);
-              if (found.orgName || found.org_name) setOrgName(found.orgName || found.org_name);
-              if (found.ownerName || found.owner_name) setOwnerName(found.ownerName || found.owner_name);
-              if (found.experience || found.lanExperience) setExperience(found.experience || found.lanExperience);
-              if (found.since) setSince(found.since);
-              if (found.description) setDescription(found.description);
-              if (found.previousWork || found.previous_work) setPreviousWork(found.previousWork || found.previous_work);
-              if (found.achievements) setAchievements(found.achievements);
-              if (found.overallPlayers || found.overall_players) setOverallPlayers(found.overallPlayers || found.overall_players);
-              if (found.youtube) setYoutube(found.youtube);
-              if (found.instagram) setInstagram(found.instagram);
-              if (found.discord) setDiscord(found.discord);
-              if (found.website) setWebsite(found.website);
-              if (found.ownerYoutube || found.owner_youtube) setOwnerYoutube(found.ownerYoutube || found.owner_youtube);
-              if (found.ownerInstagram || found.owner_instagram) setOwnerInstagram(found.ownerInstagram || found.owner_instagram);
-              if (found.ownerDiscord || found.owner_discord) setOwnerDiscord(found.ownerDiscord || found.owner_discord);
-              if (found.ownerWebsite || found.owner_website) setOwnerWebsite(found.ownerWebsite || found.owner_website);
+              populateFromPost(found);
             }
           }
         } catch (e) {
@@ -98,7 +110,7 @@ const CommunityAddScreen = () => {
       };
       checkExisting();
     }
-  }, [category, isEdit]);
+  }, [category, isEdit, existingPost]);
 
   const isEsports = category === 'Esports';
   const isAcademy = category === 'Academy';

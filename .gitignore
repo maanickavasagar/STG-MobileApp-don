@@ -73,3 +73,12 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Release builds
+*.aab
+*.apk
+*.jks
+mapping*.txt
+login_fixed.png
+login_restored.png
+screen_latest.png

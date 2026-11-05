@@ -349,7 +349,7 @@ const ProfileScreen = ({ route, navigation }: any) => {
               onPress={() => openFollowModal('followers')}
             >
               <Text style={styles.statNumber}>{displayedProfile.followers || 0}</Text>
-              <Text style={styles.statLabel}>Followers</Text>
+              <Text style={styles.statLabel}>Supporters</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
@@ -358,7 +358,7 @@ const ProfileScreen = ({ route, navigation }: any) => {
               onPress={() => openFollowModal('following')}
             >
               <Text style={styles.statNumber}>{displayedProfile.following || 0}</Text>
-              <Text style={styles.statLabel}>Following</Text>
+              <Text style={styles.statLabel}>Supporting</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -392,7 +392,11 @@ const ProfileScreen = ({ route, navigation }: any) => {
               style={[styles.actionBtn, { backgroundColor: isFollowing ? '#262626' : '#E51025' }]}
               onPress={handleFollowToggle}
             >
-              <Text style={styles.actionBtnText}>{isFollowing ? 'Following' : 'Follow'}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                {!isFollowing && <Icon name="add" size={16} color="#FFF" style={{ marginRight: 4 }} />}
+                {isFollowing && <Icon name="checkmark" size={16} color="#FFF" style={{ marginRight: 4 }} />}
+                <Text style={styles.actionBtnText}>{isFollowing ? 'Supporting' : 'Support'}</Text>
+              </View>
             </TouchableOpacity>
           )}
         </View>
@@ -571,7 +575,7 @@ const ProfileScreen = ({ route, navigation }: any) => {
               onPress={() => handleTabSwitch('followers')}
             >
               <Text style={[styles.followTabText, followTab === 'followers' && styles.followTabTextActive]}>
-                {displayedProfile.followers || 0} Followers
+                {displayedProfile.followers || 0} Supporters
               </Text>
             </TouchableOpacity>
 
@@ -580,7 +584,7 @@ const ProfileScreen = ({ route, navigation }: any) => {
               onPress={() => handleTabSwitch('following')}
             >
               <Text style={[styles.followTabText, followTab === 'following' && styles.followTabTextActive]}>
-                {displayedProfile.following || 0} Following
+                {displayedProfile.following || 0} Supporting
               </Text>
             </TouchableOpacity>
           </View>
@@ -661,7 +665,7 @@ const ProfileScreen = ({ route, navigation }: any) => {
                           styles.userRowActionText, 
                           item.is_following ? styles.userRowFollowingText : styles.userRowFollowText
                         ]}>
-                          {item.is_following ? 'Following' : 'Follow'}
+                          {item.is_following ? 'Supporting' : '+ Support'}
                         </Text>
                       </TouchableOpacity>
                     )}

@@ -1,5 +1,6 @@
-import React, { useState, useContext, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, FlatList, KeyboardAvoidingView, Platform, Image, StatusBar, Modal, Alert, ScrollView, Switch, PermissionsAndroid } from 'react-native';
+import React, { useState, useContext, useRef, useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, FlatList, KeyboardAvoidingView, Platform, Image, StatusBar, Modal, Alert, ScrollView, Switch, PermissionsAndroid, Vibration } from 'react-native';
+import { translateMessage, SUPPORTED_LANGUAGES } from '../utils/aiTranslator';
 import AudioRecorderPlayer from 'react-native-audio-recorder-player';
 import RNFS from '../utils/SafeRNFS';
 import { AppContext } from '../context/AppContext';
@@ -11,13 +12,41 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
 const ChatScreen = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const { userId, userName, isGroup, isCreator = true, members, permissions } = route.params || { userId: '1', userName: 'Unknown User', isGroup: false, isCreator: true };
 
-  const { chats, toggleFavoriteChat, userProfile, currentUserId } = useContext(AppContext);
+  const { chats, toggleFavoriteChat, updateChatDetails, userProfile, currentUserId, notifyNewMessage, aiTranslateEnabled, setAiTranslateEnabled, userTargetLanguage, setUserTargetLanguage, markChatAsRead } = useContext(AppContext);
   const currentChat = chats.find(c => c.id === userId);
   const isFavorite = currentChat?.isFavorite || false;
+
+  const isTournamentGroup = Boolean(
+    route.params?.isTournamentGroup ||
+    (currentChat as any)?.isTournamentGroup ||
+    (userName && userName.includes(' - Group '))
+  );
+
+  const [isLangModalVisible, setLangModalVisible] = useState(false);
+  const [revealedOriginalMap, setRevealedOriginalMap] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (markChatAsRead && userId) {
+      markChatAsRead(userId);
+    }
+  }, [userId]);
+
+  const isDismantled = useMemo(() => {
+    if (!isTournamentGroup) return false;
+    const endDate = route.params?.regEndDate || (currentChat as any)?.regEndDate;
+    if (endDate) {
+      const endMs = new Date(endDate).getTime();
+      const oneWeekAfter = endMs + 7 * 24 * 60 * 60 * 1000;
+      if (!isNaN(endMs) && Date.now() > oneWeekAfter) {
+        return true;
+      }
+    }
+    return false;
+  }, [isTournamentGroup, route.params, currentChat]);
 
   const [message, setMessage] = useState('');
   const [isMenuVisible, setMenuVisible] = useState(false);
@@ -44,6 +73,41 @@ const ChatScreen = () => {
     { id: '104', name: 'Jonathan', username: 'jonathan_gaming', avatar: 'https://i.pravatar.cc/150?u=104' },
   ];
   const [groupLogo, setGroupLogo] = useState(`https://i.pravatar.cc/150?u=${userId}`);
+  const handlePickLogo = () => {
+    launchImageLibrary({ mediaType: 'photo', quality: 0.8 }, (response) => {
+      if (response.assets && response.assets[0]?.uri) {
+        const newLogoUri = response.assets[0].uri;
+        setGroupLogo(newLogoUri);
+        if (updateChatDetails) {
+          updateChatDetails(userId, { avatar: newLogoUri });
+        }
+        try {
+          apiService.updateGroup(userId, { logo: newLogoUri });
+        } catch (e) {}
+      }
+    });
+  };
+
+  const handleSaveGroupName = () => {
+    setEditNameVisible(false);
+    if (updateChatDetails && currentGroupName.trim()) {
+      updateChatDetails(userId, { name: currentGroupName.trim() });
+    }
+    try {
+      apiService.updateGroup(userId, { name: currentGroupName.trim() });
+    } catch (e) {}
+  };
+
+  const handleSaveGroupDesc = () => {
+    setEditDescVisible(false);
+    if (updateChatDetails && groupDescription.trim()) {
+      updateChatDetails(userId, { description: groupDescription.trim() });
+    }
+    try {
+      apiService.updateGroup(userId, { description: groupDescription.trim() });
+    } catch (e) {}
+  };
+
   
   const audioRecorderPlayer = useRef(new AudioRecorderPlayer()).current;
   const [recordSecs, setRecordSecs] = useState(0);
@@ -190,16 +254,32 @@ const ChatScreen = () => {
   ]);
 
   const myRole = groupMembers.find(m => m.id === '1' || m.id === 'me')?.role || 'member';
-  const iAmAdmin = myRole === 'admin' || myRole === 'super_admin';
-  const iAmSuperAdmin = myRole === 'super_admin';
+  const isGroupAdmin = isGroup && (
+    isCreator || 
+    myRole === 'admin' || 
+    myRole === 'super_admin' || 
+    currentUserId === currentChat?.adminId || 
+    userProfile?.id === currentChat?.adminId ||
+    Boolean(currentChat?.isUserCreated)
+  );
+  const iAmAdmin = isGroupAdmin || myRole === 'admin' || myRole === 'super_admin';
+  const iAmSuperAdmin = isGroupAdmin || myRole === 'super_admin';
 
   useEffect(() => {
+    let isMounted = true;
     const fetchChatData = async () => {
       try {
         const msgs = await apiService.getChatMessages(userId, userProfile?.id || currentUserId || '1');
-        if (msgs && Array.isArray(msgs)) setMessages(msgs);
+        if (isMounted && msgs && Array.isArray(msgs) && msgs.length > 0) {
+          setMessages(prev => {
+            if (msgs.length !== prev.length || (msgs[msgs.length - 1]?.text !== prev[prev.length - 1]?.text)) {
+              return msgs;
+            }
+            return prev;
+          });
+        }
         
-        if (isGroup) {
+        if (isGroup && isMounted) {
           const info = await apiService.getGroupInfo(userId);
           if (info) {
             if (info.name) setCurrentGroupName(info.name);
@@ -209,31 +289,43 @@ const ChatScreen = () => {
           }
         }
       } catch(e) {
-        console.log('API error fetching chat info:', e);
+        // quiet polling
       }
     };
     fetchChatData();
-  }, [userId, isGroup]);
+    // Continuous 2-second real-time polling so messages appear instantly
+    const pollInterval = setInterval(fetchChatData, 2000);
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+    };
+  }, [userId, isGroup, userProfile?.id, currentUserId]);
   
   const [messages, setMessages] = useState(
     isGroup 
     ? [
-        { id: '1', text: 'Welcome to the Organisation group!', sender: 'other', senderName: 'Admin', time: '10:00 AM' },
-        { id: '2', text: 'Hey guys, excited to join.', sender: 'other', senderName: 'Viper', time: '10:05 AM' }
+        { id: '1', text: 'Welcome to the tournament group!', sender: 'other', senderName: 'Admin', time: '10:00 AM' },
+        { id: '2', text: 'What time is the match?', sender: 'other', senderName: 'Viper', time: '10:05 AM' },
+        { id: '3', text: 'Send room ID and password', sender: 'other', senderName: 'Official', time: '10:10 AM' },
+        { id: '4', text: 'All players join your slots', sender: 'other', senderName: 'Admin', time: '10:15 AM' }
       ]
     : [
-        { id: '1', text: 'Hi, I saw your post looking for a squad.', sender: 'me', time: '10:00 AM' },
-        { id: '2', text: 'Hey! Yes, are you interested?', sender: 'other', time: '10:05 AM' }
+        { id: '1', text: 'Hi bro', sender: 'me', time: '10:00 AM' },
+        { id: '2', text: 'What time is the match?', sender: 'other', time: '10:05 AM' },
+        { id: '3', text: 'Send room ID and password', sender: 'other', time: '10:10 AM' },
+        { id: '4', text: 'Congratulations you qualified', sender: 'other', time: '10:15 AM' }
       ]
   );
 
   const sendMessage = async () => {
+    try { Vibration.vibrate(35); } catch (e) {}
     if (message.trim().length > 0) {
       const text = message;
       setMessage('');
       setMessages(prev => [...prev, { id: Date.now().toString(), text: text, sender: 'me', is_me: true, time: 'Now' }]);
       try {
         await apiService.sendMessage(userId, text, userProfile?.id || currentUserId || 'unknown');
+        // Do NOT notify sender! Self-notification is removed!
       } catch (err) {}
     }
   };
@@ -280,7 +372,11 @@ const ChatScreen = () => {
 
   const deleteMessage = (type: 'me' | 'everyone') => {
     if (selectedMessage) {
-      setMessages(messages.filter(m => m.id !== selectedMessage.id));
+      if (type === 'everyone') {
+        setMessages(prev => prev.map(m => m.id === selectedMessage.id ? { ...m, isDeleted: true, text: '🚫 This message was deleted' } : m));
+      } else {
+        setMessages(prev => prev.filter(m => m.id !== selectedMessage.id));
+      }
     }
     setSelectedMessage(null);
   };
@@ -292,6 +388,23 @@ const ChatScreen = () => {
                  item.is_me === true || 
                  (!!myId && !!msgSenderId && myId === msgSenderId) ||
                  (item.sender && String(item.sender).toLowerCase() === 'me');
+
+    if (item.isDeleted || item.text === '🚫 This message was deleted') {
+      return (
+        <View style={[styles.messageBubble, isMe ? styles.messageMe : styles.messageOther, { paddingVertical: 8, paddingHorizontal: 12, opacity: 0.85 }]}>
+          {!isMe && isGroup && <Text style={styles.messageSenderName}>{item.senderName}</Text>}
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Icon name="ban-outline" size={14} color={isMe ? '#FCA5A5' : '#64748B'} style={{ marginRight: 6 }} />
+            <Text style={{ fontSize: 13, fontStyle: 'italic', color: isMe ? '#FEE2E2' : '#64748B' }}>
+              This message was deleted
+            </Text>
+          </View>
+          <Text style={[styles.messageTime, isMe ? styles.messageTimeMe : styles.messageTimeOther, { marginTop: 2, fontSize: 10, alignSelf: 'flex-end' }]}>
+            {item.time || 'Now'}
+          </Text>
+        </View>
+      );
+    }
     
     if (item.type === 'voice') {
       const isPlaying = playingId === item.id;
@@ -346,8 +459,34 @@ const ChatScreen = () => {
         style={[styles.messageBubble, isMe ? styles.messageMe : styles.messageOther]}
       >
         {!isMe && isGroup && <Text style={styles.messageSenderName}>{item.senderName}</Text>}
-        <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextOther]}>{item.text}</Text>
-        <Text style={[styles.messageTime, isMe ? styles.messageTimeMe : styles.messageTimeOther]}>{item.time}</Text>
+        <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextOther]}>
+          {(() => {
+            const shouldTranslate = aiTranslateEnabled && !isMe;
+            const isOriginal = revealedOriginalMap[item.id] === true;
+            if (shouldTranslate && !isOriginal) {
+              return translateMessage(item.text, userTargetLanguage);
+            }
+            return item.text;
+          })()}
+        </Text>
+        {aiTranslateEnabled && !isMe && translateMessage(item.text, userTargetLanguage) !== item.text && (
+          <TouchableOpacity 
+            onPress={() => setRevealedOriginalMap(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
+            style={{ marginTop: 2, marginBottom: 2 }}
+          >
+            <Text style={{ fontSize: 10, color: isMe ? '#FDE68A' : '#047857', fontStyle: 'italic', fontWeight: 'bold' }}>
+              {revealedOriginalMap[item.id] ? `✨ Tap to see translation (${SUPPORTED_LANGUAGES.find(l => l.code === userTargetLanguage)?.nativeName})` : `✨ AI Translated to ${SUPPORTED_LANGUAGES.find(l => l.code === userTargetLanguage)?.nativeName} • Tap for original`}
+            </Text>
+          </TouchableOpacity>
+        )}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 2 }}>
+          <Text style={[styles.messageTime, isMe ? styles.messageTimeMe : styles.messageTimeOther, { marginTop: 0 }]}>
+            {item.time}
+          </Text>
+          {isMe && (
+            <Icon name="checkmark-done" size={14} color="#60A5FA" style={{ marginLeft: 3 }} />
+          )}
+        </View>
       </TouchableOpacity>
     );
   };
@@ -375,6 +514,141 @@ const ChatScreen = () => {
         </TouchableOpacity>
       </View>
 
+      {/* AI Live Multilingual Auto-Translation Toolbar */}
+      <View style={{
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#F8FAFC',
+        paddingHorizontal: 14,
+        paddingVertical: 7,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E2E8F0'
+      }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Icon name="planet-outline" size={17} color={aiTranslateEnabled ? '#059669' : '#64748B'} style={{ marginRight: 6 }} />
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginRight: 6 }}>
+            AI Translate:
+          </Text>
+          <TouchableOpacity 
+            onPress={() => setLangModalVisible(true)}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: '#FFFFFF',
+              borderWidth: 1,
+              borderColor: '#CBD5E1',
+              paddingHorizontal: 8,
+              paddingVertical: 3,
+              borderRadius: 6
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#0F172A' }}>
+              {SUPPORTED_LANGUAGES.find(l => l.code === userTargetLanguage)?.flag} {SUPPORTED_LANGUAGES.find(l => l.code === userTargetLanguage)?.nativeName}
+            </Text>
+            <Icon name="chevron-down" size={11} color="#64748B" style={{ marginLeft: 4 }} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={{ fontSize: 10, fontWeight: '800', color: aiTranslateEnabled ? '#059669' : '#94A3B8', marginRight: 4 }}>
+            {aiTranslateEnabled ? 'ACTIVE' : 'OFF'}
+          </Text>
+          <Switch
+            value={aiTranslateEnabled}
+            onValueChange={setAiTranslateEnabled}
+            trackColor={{ false: '#CBD5E1', true: '#A7F3D0' }}
+            thumbColor={aiTranslateEnabled ? '#059669' : '#F1F5F9'}
+            style={{ transform: [{ scaleX: 0.75 }, { scaleY: 0.75 }] }}
+          />
+        </View>
+      </View>
+
+      {/* Language Picker Modal */}
+      <Modal
+        visible={isLangModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setLangModalVisible(false)}
+      >
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
+          activeOpacity={1}
+          onPress={() => setLangModalVisible(false)}
+        >
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 16, width: '100%', maxWidth: 340, padding: 20 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Icon name="language" size={20} color="#E51025" style={{ marginRight: 8 }} />
+                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#111827' }}>Select Mother Tongue</Text>
+              </View>
+              <TouchableOpacity onPress={() => setLangModalVisible(false)}>
+                <Icon name="close" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 14, lineHeight: 17 }}>
+              Messages sent in other languages (Hindi, Telugu, English, etc.) will auto-convert into your selected native language in real-time.
+            </Text>
+
+            {SUPPORTED_LANGUAGES.map(lang => (
+              <TouchableOpacity
+                key={lang.code}
+                onPress={() => {
+                  setUserTargetLanguage(lang.code);
+                  setAiTranslateEnabled(true);
+                  setLangModalVisible(false);
+                }}
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  paddingVertical: 10,
+                  paddingHorizontal: 12,
+                  borderRadius: 8,
+                  backgroundColor: userTargetLanguage === lang.code ? '#FEF2F2' : '#F9FAFB',
+                  marginBottom: 6,
+                  borderWidth: 1,
+                  borderColor: userTargetLanguage === lang.code ? '#FECACA' : '#F3F4F6'
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 18, marginRight: 10 }}>{lang.flag}</Text>
+                  <Text style={{ fontSize: 14, fontWeight: userTargetLanguage === lang.code ? 'bold' : '600', color: '#111827' }}>
+                    {lang.name} ({lang.nativeName})
+                  </Text>
+                </View>
+                {userTargetLanguage === lang.code && (
+                  <Icon name="checkmark-circle" size={18} color="#E51025" />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Tournament Notice Banner */}
+      {isTournamentGroup && (
+        <View style={styles.tournamentNoticeBanner}>
+          <Icon name="information-circle" size={20} color="#E51025" style={{ marginRight: 8, marginTop: 2 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tournamentNoticeTitle}>Tournament Official Group</Text>
+            <Text style={styles.tournamentNoticeText}>
+              Official tournament announcements & room IDs will be posted here by the organiser.
+              This group will automatically dismantle 1 week after the Grand Finals.
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {isDismantled && (
+        <View style={styles.dismantledBanner}>
+          <Icon name="alert-circle" size={18} color="#DC2626" style={{ marginRight: 6 }} />
+          <Text style={styles.dismantledText}>
+            This tournament has concluded. This group is dismantled and archived.
+          </Text>
+        </View>
+      )}
+
       {/* Chat Body */}
       <KeyboardAvoidingView 
         style={{ flex: 1 }} 
@@ -390,7 +664,11 @@ const ChatScreen = () => {
         />
         {/* Input Footer */}
         <View style={styles.inputContainerWrapper}>
-          {(isGroup && adminOnly && !iAmAdmin) ? (
+          {isDismantled ? (
+            <View style={{ flex: 1, backgroundColor: '#F3F4F6', paddingVertical: 12, borderRadius: 24, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: '#DC2626', fontSize: 14, fontWeight: 'bold' }}>Group is dismantled (Tournament ended)</Text>
+            </View>
+          ) : (isGroup && adminOnly && !iAmAdmin) ? (
             <View style={{ flex: 1, backgroundColor: '#F3F4F6', paddingVertical: 12, borderRadius: 24, alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ color: '#6B7280', fontSize: 15, fontWeight: '500' }}>Only admins can send messages</Text>
             </View>
@@ -637,7 +915,7 @@ const ChatScreen = () => {
               <TextInput style={{ borderBottomWidth: 1, borderBottomColor: '#E51025', fontSize: 16, paddingVertical: 5, color: '#111827', marginBottom: 20 }} value={currentGroupName} onChangeText={setCurrentGroupName} placeholder="Enter Group Name" placeholderTextColor="#9CA3AF" />
               <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 15 }}>
                 <TouchableOpacity onPress={() => setEditNameVisible(false)}><Text style={{ color: '#6B7280', fontSize: 16, fontWeight: 'bold' }}>Cancel</Text></TouchableOpacity>
-                <TouchableOpacity onPress={() => setEditNameVisible(false)}><Text style={{ color: '#E51025', fontSize: 16, fontWeight: 'bold' }}>Save</Text></TouchableOpacity>
+                <TouchableOpacity onPress={handleSaveGroupName}><Text style={{ color: '#E51025', fontSize: 16, fontWeight: 'bold' }}>Save</Text></TouchableOpacity>
               </View>
             </View>
           </View>
@@ -650,7 +928,7 @@ const ChatScreen = () => {
               <TextInput style={{ borderBottomWidth: 1, borderBottomColor: '#E51025', fontSize: 16, paddingVertical: 5, color: '#111827', marginBottom: 20 }} value={groupDescription} onChangeText={setGroupDescription} multiline placeholder="Enter Group Description" placeholderTextColor="#9CA3AF" />
               <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 15 }}>
                 <TouchableOpacity onPress={() => setEditDescVisible(false)}><Text style={{ color: '#6B7280', fontSize: 16, fontWeight: 'bold' }}>Cancel</Text></TouchableOpacity>
-                <TouchableOpacity onPress={() => setEditDescVisible(false)}><Text style={{ color: '#E51025', fontSize: 16, fontWeight: 'bold' }}>Save</Text></TouchableOpacity>
+                <TouchableOpacity onPress={handleSaveGroupDesc}><Text style={{ color: '#E51025', fontSize: 16, fontWeight: 'bold' }}>Save</Text></TouchableOpacity>
               </View>
             </View>
           </View>
@@ -744,17 +1022,25 @@ const ChatScreen = () => {
                 <View style={[styles.optionIconBg, { backgroundColor: '#FCE7F3' }]}>
                   <Icon name="trash" size={24} color="#DB2777" />
                 </View>
-                <Text style={styles.optionText}>Delete Msg</Text>
+                <Text style={styles.optionText}>Delete for Me</Text>
               </TouchableOpacity>
               
-              {selectedMessage?.sender === 'me' && (
-                <TouchableOpacity style={styles.optionBtn} onPress={() => deleteMessage('everyone')}>
-                  <View style={[styles.optionIconBg, { backgroundColor: '#FEF2F2' }]}>
-                    <Icon name="trash-bin" size={24} color="#E51025" />
-                  </View>
-                  <Text style={styles.optionText}>Delete for All</Text>
-                </TouchableOpacity>
-              )}
+              {(() => {
+                const myId = String(userProfile?.id || currentUserId || '').replace('user_', '');
+                const msgSenderId = String(selectedMessage?.sender_id || '').replace('user_', '');
+                const isMsgMe = selectedMessage?.sender === 'me' || 
+                                selectedMessage?.is_me === true || 
+                                (!!myId && !!msgSenderId && myId === msgSenderId);
+                if (!isMsgMe) return null;
+                return (
+                  <TouchableOpacity style={styles.optionBtn} onPress={() => deleteMessage('everyone')}>
+                    <View style={[styles.optionIconBg, { backgroundColor: '#FEF2F2' }]}>
+                      <Icon name="trash-bin" size={24} color="#E51025" />
+                    </View>
+                    <Text style={styles.optionText}>Delete for Everyone</Text>
+                  </TouchableOpacity>
+                );
+              })()}
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -1013,6 +1299,39 @@ const ChatScreen = () => {
 
 
 const styles = StyleSheet.create({
+  tournamentNoticeBanner: {
+    flexDirection: 'row',
+    backgroundColor: '#FEF2F2',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FEE2E2',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    alignItems: 'flex-start',
+  },
+  tournamentNoticeTitle: {
+    color: '#E51025',
+    fontWeight: 'bold',
+    fontSize: 13,
+    marginBottom: 2,
+  },
+  tournamentNoticeText: {
+    color: '#4B5563',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  dismantledBanner: {
+    flexDirection: 'row',
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dismantledText: {
+    color: '#DC2626',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
   safeArea: { flex: 1, backgroundColor: '#F4F6F8' },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 12, backgroundColor: '#FFFFFF', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 4, zIndex: 10, borderBottomWidth: 1, borderBottomColor: '#F4F6F8' },
   backBtn: { marginRight: 10, padding: 4 },

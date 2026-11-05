@@ -1,4 +1,6 @@
-﻿import React, { useContext } from 'react';
+import React, { useContext, useRef } from 'react';
+import { TouchableOpacity, Text, StyleSheet } from 'react-native';
+import Icon from 'react-native-vector-icons/Ionicons';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -37,6 +39,94 @@ import { ActivityScreen, SavedScreen, CloseFriendsScreen, BlockedScreen } from '
 import SettingsScreen from './src/screens/SettingsScreen';
 const Stack = createNativeStackNavigator();
 
+const MessageNotificationBanner = ({ navigationRef }: any) => {
+  const { inAppNotification, dismissNotification } = useContext(AppContext);
+  if (!inAppNotification) return null;
+
+  return (
+    <View style={notificationStyles.wrapper} pointerEvents="box-none">
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPress={() => {
+          dismissNotification();
+          if (navigationRef?.current) {
+            navigationRef.current.navigate('ChatScreen', {
+              userId: inAppNotification.chatId,
+              userName: inAppNotification.senderName,
+              isGroup: false,
+            });
+          }
+        }}
+        style={notificationStyles.banner}
+      >
+        <View style={notificationStyles.iconCircle}>
+          <Icon name="chatbubble-ellipses" size={20} color="#FFFFFF" />
+        </View>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={notificationStyles.senderName}>{inAppNotification.senderName}</Text>
+            <Text style={notificationStyles.badge}>Now</Text>
+          </View>
+          <Text style={notificationStyles.messageText} numberOfLines={1}>
+            {inAppNotification.message}
+          </Text>
+        </View>
+        <TouchableOpacity onPress={dismissNotification} style={{ padding: 6, marginLeft: 6 }}>
+          <Icon name="close" size={18} color="#9CA3AF" />
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </View>
+  );
+};
+
+const notificationStyles = StyleSheet.create({
+  wrapper: {
+    position: 'absolute',
+    top: 40,
+    left: 15,
+    right: 15,
+    zIndex: 9999,
+    elevation: 10,
+  },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E293B',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  iconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#E51025',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  senderName: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  badge: {
+    color: '#E51025',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  messageText: {
+    color: '#CBD5E1',
+    fontSize: 13,
+    marginTop: 2,
+  },
+});
+
 const RootNavigator = () => {
   const { isAppLoading, userProfile, currentUserId } = useContext(AppContext);
 
@@ -53,11 +143,13 @@ const RootNavigator = () => {
   // 2. If we only have a currentUserId (404 profile), go to PlayerDetails to create one
   // 3. Otherwise, go to Login
   const initialRoute = userProfile ? "MainTabs" : currentUserId ? "PlayerDetails" : "Login";
+  const navigationRef = useRef<any>(null);
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator 
-        initialRouteName={initialRoute}
+    <View style={{ flex: 1 }}>
+      <NavigationContainer ref={navigationRef}>
+        <Stack.Navigator 
+          initialRouteName={initialRoute}
         screenOptions={{
           headerShown: false,
         }}
@@ -180,7 +272,9 @@ const RootNavigator = () => {
             <Stack.Screen name="CloseFriendsScreen" component={CloseFriendsScreen} />
             <Stack.Screen name="BlockedScreen" component={BlockedScreen} />
           </Stack.Navigator>
-    </NavigationContainer>
+      </NavigationContainer>
+      <MessageNotificationBanner navigationRef={navigationRef} />
+    </View>
   );
 };
 

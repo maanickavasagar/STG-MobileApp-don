@@ -1,7 +1,7 @@
-export const NGROK_URL = 'https://impromptu-system-driller.ngrok-free.dev';
+export const NGROK_URL = 'https://manor-hardcopy-sizable.ngrok-free.dev';
 export const BASE_URL = `${NGROK_URL}/stgapp/`;
 export const MEDIA_URL = `${NGROK_URL}/media/`;
-export const WS_BASE_URL = 'wss://impromptu-system-driller.ngrok-free.dev/ws/chat/';
+export const WS_BASE_URL = 'wss://manor-hardcopy-sizable.ngrok-free.dev/ws/chat/';
 
 export const API_ENDPOINTS = {
   HOME: `${BASE_URL}home`,

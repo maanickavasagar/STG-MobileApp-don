@@ -16,6 +16,9 @@ export interface TeamRegistrationData {
   slot: string;
   map?: string;
   players: Player[];
+  user_id?: string;
+  userId?: string;
+  tournament?: any;
 }
 
 export interface UserProfile {
@@ -65,6 +68,9 @@ export interface Tournament {
   bannerImage?: string | null;
   flyerImage?: any;
   organiserName?: string;
+  rules?: string;
+  user_id?: string;
+  creator_id?: string;
   matchDate?: string;
   templateId?: string;
   templateData?: any;
@@ -84,6 +90,8 @@ export interface Tournament {
   socialMedia2?: string;
   socialMedia3?: string;
   socialMedia4?: string;
+  eventLogo?: string | null;
+  [key: string]: any;
 }
 
 export interface Match {
@@ -94,12 +102,18 @@ export interface Match {
   time: string;
   venue: string;
   isLive: boolean;
+  tournamentId?: string;
+  name?: string;
+  status?: string;
+  tournamentDetails?: any;
+  organiserName?: string;
+  [key: string]: any;
 }
 
 export interface GroupMember {
   id: string;
   name: string;
-  avatar: string;
+  avatar?: string;
   role: 'super_admin' | 'admin' | 'member';
 }
 
@@ -110,6 +124,16 @@ export interface GroupPermissions {
   approveMembers: boolean;
 }
 
+export interface AppNotification {
+  id: string;
+  title: string;
+  message: string;
+  time: string;
+  type: 'system' | 'tournament' | 'chat';
+  isRead: boolean;
+  link?: string;
+}
+
 export interface ChatItem {
   id: string;
   name: string;
@@ -118,8 +142,21 @@ export interface ChatItem {
   unread: number;
   isGroup: boolean;
   isFavorite?: boolean;
+  isUserCreated?: boolean;
+  isTournamentGroup?: boolean;
+  tournamentId?: string;
+  tournamentName?: string;
+  stageName?: string;
+  groupIndex?: number;
+  maxTeams?: number;
+  joinedTeams?: number;
+  regEndDate?: string;
+  grandFinalsDate?: string;
+  adminId?: string;
+  adminName?: string;
   members?: GroupMember[];
   permissions?: GroupPermissions;
+  [key: string]: any;
 }
 
 interface AppContextType {
@@ -140,6 +177,7 @@ interface AppContextType {
   chats: ChatItem[];
   addMultipleChats: (newChats: ChatItem[]) => void;
   toggleFavoriteChat: (id: string) => void;
+  updateChatDetails: (chatId: string, updates: Partial<ChatItem>) => void;
   userProfile: UserProfile | null;
   currentUserId: string | null;
   setUserProfile: (profile: UserProfile | null) => void;
@@ -150,6 +188,27 @@ interface AppContextType {
   isAppLoading: boolean;
     isDrawerOpen: boolean;
     setIsDrawerOpen: (isOpen: boolean) => void;
+  inAppNotification: {
+    id: string;
+    senderName: string;
+    message: string;
+    chatId: string;
+    avatar?: string;
+  } | null;
+  notifyNewMessage: (senderName: string, message: string, chatId: string, avatar?: string) => void;
+  dismissNotification: () => void;
+  markChatAsRead: (id: string) => void;
+  appNotifications: AppNotification[];
+  unreadNotificationCount: number;
+  markNotificationAsRead: (id: string) => void;
+  markAllNotificationsAsRead: () => void;
+  addAppNotification: (notif: Partial<AppNotification>) => void;
+  supportedUserIds: string[];
+  toggleSupportUser: (targetUserId: string, targetName?: string) => Promise<boolean>;
+  aiTranslateEnabled: boolean;
+  setAiTranslateEnabled: (val: boolean) => void;
+  userTargetLanguage: string;
+  setUserTargetLanguage: (lang: string) => void;
 }
 
 export const AppContext = createContext<AppContextType>({
@@ -170,7 +229,9 @@ export const AppContext = createContext<AppContextType>({
   chats: [],
   addMultipleChats: () => {},
   toggleFavoriteChat: () => {},
+  updateChatDetails: () => {},
   userProfile: null,
+  currentUserId: null,
   setUserProfile: () => {},
   updateUserProfile: async () => {},
   loginUser: async () => false,
@@ -179,6 +240,21 @@ export const AppContext = createContext<AppContextType>({
   isAppLoading: true,
     isDrawerOpen: false,
     setIsDrawerOpen: () => {},
+  inAppNotification: null,
+  notifyNewMessage: () => {},
+  dismissNotification: () => {},
+  markChatAsRead: () => {},
+  appNotifications: [],
+  unreadNotificationCount: 0,
+  markNotificationAsRead: () => {},
+  markAllNotificationsAsRead: () => {},
+  addAppNotification: () => {},
+  supportedUserIds: [],
+  toggleSupportUser: async () => false,
+  aiTranslateEnabled: false,
+  setAiTranslateEnabled: () => {},
+  userTargetLanguage: 'ta',
+  setUserTargetLanguage: () => {},
 });
 
 export const AppContextProvider = ({ children }: { children: ReactNode }) => {
@@ -192,14 +268,229 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
   const [isAppLoading, setIsAppLoading] = useState(true);
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
-  const [chats, setChats] = useState<ChatItem[]>([]);
+  const DEFAULT_CHATS: ChatItem[] = [
+    {
+      id: 'chat_scout',
+      name: 'ScoutOP (Team X)',
+      lastMessage: 'send room id and password',
+      time: '11:45 AM',
+      unread: 2,
+      isGroup: false,
+      avatar: 'https://i.pravatar.cc/150?u=scout',
+    },
+    {
+      id: 'chat_mortal',
+      name: 'Mortal (SouL)',
+      lastMessage: 'what time is the match',
+      time: '11:20 AM',
+      unread: 1,
+      isGroup: false,
+      avatar: 'https://i.pravatar.cc/150?u=mortal',
+    },
+    {
+      id: 'chat_official',
+      name: 'UPMI Match Official Desk',
+      lastMessage: 'Room ID & Password will be shared here 15 mins before match starts.',
+      time: '10:30 AM',
+      unread: 2,
+      isGroup: true,
+      isTournamentGroup: true,
+      avatar: 'https://i.pravatar.cc/150?u=UPMI_Desk',
+      members: [
+        { id: 'admin1', name: 'Official Moderator', role: 'admin' },
+        { id: 'p1', name: 'Team Soul', role: 'member' }
+      ]
+    },
+    {
+      id: 'chat_soul_godlike',
+      name: 'Team Soul vs GodLike Scrims',
+      lastMessage: 'Ready for Miramar Round 2?',
+      time: '10:15 AM',
+      unread: 1,
+      isGroup: true,
+      isTournamentGroup: true,
+      avatar: 'https://i.pravatar.cc/150?u=Soul_GodLike',
+      members: [
+        { id: 'soul1', name: 'Mortal', role: 'member' },
+        { id: 'god1', name: 'Jonathan', role: 'member' }
+      ]
+    },
+    {
+      id: 'chat_qualifier_grp1',
+      name: 'Championship Qualifier Group 1',
+      lastMessage: 'Slot 1 to 18 check-in complete. Match begins at 12:00 PM.',
+      time: 'Yesterday',
+      unread: 3,
+      isGroup: true,
+      isTournamentGroup: true,
+      avatar: 'https://i.pravatar.cc/150?u=Qualifier_Grp1'
+    }
+  ];
+
+  const [chats, setChats] = useState<ChatItem[]>(DEFAULT_CHATS);
+
+  // Mark chat as read
+  const markChatAsRead = (id: string) => {
+    setChats(prev => {
+      const updated = prev.map(c => c.id === id ? { ...c, unread: 0 } : c);
+      try {
+        AsyncStorage.setItem('@persisted_chats', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+  };
+
+  // App Notifications
+  const DEFAULT_NOTIFICATIONS: AppNotification[] = [
+    {
+      id: 'notif_1',
+      title: 'UPMI CRM v3.2 Live Updates',
+      message: 'New round group setup, AI live chat translation & supporter badges are now active!',
+      time: 'Just now',
+      type: 'system',
+      isRead: false,
+    },
+    {
+      id: 'notif_2',
+      title: 'Tournament Round Announcement',
+      message: 'Qualifier Stage groups have been generated. Check your slot list & room announcements.',
+      time: '10m ago',
+      type: 'tournament',
+      isRead: false,
+    },
+    {
+      id: 'notif_3',
+      title: 'Welcome to UPMI Esports',
+      message: 'Connect your Instagram, build your roster, and register for active BGMI tournaments.',
+      time: '1h ago',
+      type: 'system',
+      isRead: true,
+    },
+  ];
+
+  const [appNotifications, setAppNotifications] = useState<AppNotification[]>(DEFAULT_NOTIFICATIONS);
+  const unreadNotificationCount = appNotifications.filter(n => !n.isRead).length;
+
+  const markNotificationAsRead = (id: string) => {
+    setAppNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+  };
+
+  const markAllNotificationsAsRead = () => {
+    setAppNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+  };
+
+  const addAppNotification = (notif: Partial<AppNotification>) => {
+    const newNotif: AppNotification = {
+      id: notif.id || 'notif_' + Date.now(),
+      title: notif.title || 'UPMI Notification',
+      message: notif.message || '',
+      time: notif.time || 'Just now',
+      type: notif.type || 'system',
+      isRead: false,
+      link: notif.link,
+    };
+    setAppNotifications(prev => [newNotif, ...prev]);
+  };
+
+  // Supported Users list
+  const [supportedUserIds, setSupportedUserIds] = useState<string[]>([]);
+  useEffect(() => {
+    AsyncStorage.getItem('@user_supporting').then(res => {
+      if (res) {
+        try { setSupportedUserIds(JSON.parse(res)); } catch (e) {}
+      }
+    }).catch(() => {});
+  }, []);
+
+  const toggleSupportUser = async (targetUserId: string, targetName?: string) => {
+    let isNowSupported = false;
+    setSupportedUserIds(prev => {
+      let next: string[];
+      if (prev.includes(targetUserId)) {
+        next = prev.filter(id => id !== targetUserId);
+        isNowSupported = false;
+      } else {
+        next = [...prev, targetUserId];
+        isNowSupported = true;
+      }
+      try {
+        AsyncStorage.setItem('@user_supporting', JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+    if (userProfile) {
+      const delta = isNowSupported ? 1 : -1;
+      const updatedFollowing = Math.max(0, (userProfile.following || 0) + delta);
+      updateUserProfile({ following: updatedFollowing });
+    }
+    return isNowSupported;
+  };
+
+  // AI Multilingual Translation Settings
+  const [aiTranslateEnabled, setAiTranslateEnabled] = useState(false);
+  const [userTargetLanguage, setUserTargetLanguage] = useState('ta');
+
+  const [inAppNotification, setInAppNotification] = useState<{
+    id: string;
+    senderName: string;
+    message: string;
+    chatId: string;
+    avatar?: string;
+  } | null>(null);
+
+  const notifyNewMessage = (senderName: string, message: string, chatId: string, avatar?: string, senderId?: string) => {
+    const myId = (currentUserId || userProfile?.id || '').toString().replace('user_', '').trim();
+    const cleanSenderId = (senderId || '').toString().replace('user_', '').trim();
+    // Do NOT notify yourself!
+    if (cleanSenderId && myId && cleanSenderId === myId) {
+      return;
+    }
+    const id = Date.now().toString();
+    setInAppNotification({ id, senderName, message, chatId, avatar });
+    setTimeout(() => {
+      setInAppNotification(curr => (curr?.id === id ? null : curr));
+    }, 4500);
+  };
+
+  const dismissNotification = () => {
+    setInAppNotification(null);
+  };
+
+  const updateChatDetails = (chatId: string, updates: Partial<ChatItem>) => {
+    setChats(prev => {
+      const updated = prev.map(c => c.id === chatId ? { ...c, ...updates, updatedAt: Date.now() } : c);
+      try {
+        AsyncStorage.setItem('@persisted_chats', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+  };
 
   const addMultipleChats = (newChats: ChatItem[]) => {
     setChats(prev => {
       const map = new Map<string, ChatItem>();
-      newChats.forEach(c => { if (c && c.id) map.set(c.id, c); });
+      newChats.forEach(c => {
+        if (c && c.id) {
+          map.set(c.id, {
+            ...c,
+            createdAt: c.createdAt || Date.now(),
+            updatedAt: c.updatedAt || Date.now(),
+            timestamp: c.timestamp || Date.now()
+          });
+        }
+      });
       prev.forEach(c => { if (c && c.id && !map.has(c.id)) map.set(c.id, c); });
-      return Array.from(map.values());
+      const result = Array.from(map.values());
+      // Sort strictly by timing (newest created / updated groups at the top)
+      result.sort((a: any, b: any) => {
+        const timeA = a.updatedAt || a.createdAt || a.timestamp || 0;
+        const timeB = b.updatedAt || b.createdAt || b.timestamp || 0;
+        return timeB - timeA;
+      });
+      try {
+        AsyncStorage.setItem('@persisted_chats', JSON.stringify(result));
+      } catch (e) {}
+      return result;
     });
   };
 
@@ -216,7 +507,36 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
       const updatedProfile = { ...userProfile, ...profileData } as UserProfile;
       
       try {
-        await apiService.updateProfile(updatedProfile);
+        if (profileData.profilePicture && (profileData.profilePicture.startsWith('file://') || profileData.profilePicture.startsWith('content://'))) {
+          const formData = new FormData();
+          formData.append('id', String(updatedProfile.id));
+          if (updatedProfile.fullName) formData.append('fullName', updatedProfile.fullName);
+          if (updatedProfile.username) formData.append('username', updatedProfile.username);
+          if (updatedProfile.email) formData.append('email', updatedProfile.email);
+          if (updatedProfile.dateOfBirth) formData.append('dateOfBirth', updatedProfile.dateOfBirth);
+          if (updatedProfile.gender) formData.append('gender', updatedProfile.gender);
+          if (updatedProfile.liveLocation) formData.append('liveLocation', updatedProfile.liveLocation);
+          if (updatedProfile.bio) formData.append('bio', updatedProfile.bio);
+          if (updatedProfile.region) formData.append('region', updatedProfile.region);
+          if (updatedProfile.languages) formData.append('languages', updatedProfile.languages);
+
+          const uriParts = profileData.profilePicture.split('.');
+          const fileType = uriParts[uriParts.length - 1] || 'jpg';
+          const filename = 'avatar_' + Date.now() + '.' + fileType;
+
+          formData.append('profilePicture', {
+            uri: profileData.profilePicture,
+            name: filename,
+            type: 'image/' + fileType,
+          } as any);
+
+          const res = await apiService.updateProfile(formData);
+          if (res?.data?.profilePicture) {
+            updatedProfile.profilePicture = res.data.profilePicture;
+          }
+        } else {
+          await apiService.updateProfile(updatedProfile);
+        }
       } catch (e) {
         console.log('API update profile error:', e);
       }
@@ -348,7 +668,9 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
       
       const targetUid = uid || currentUserId || '1';
       const inboxData = await apiService.getInbox(targetUid).catch(() => null);
-      if (inboxData && Array.isArray(inboxData)) setChats(inboxData);
+      if (inboxData && Array.isArray(inboxData)) {
+        addMultipleChats(inboxData);
+      }
     } catch (e) {
       console.log('Error fetching global API data:', e);
     }
@@ -358,11 +680,21 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     const loadInitialData = async () => {
       let activeUid: string | null = null;
       try {
-        let storedUserId = await AsyncStorage.getItem('userId');
-        if (!storedUserId) {
-          storedUserId = '1';
-          await AsyncStorage.setItem('userId', '1');
+        const storedChats = await AsyncStorage.getItem('@persisted_chats');
+        if (storedChats) {
+          const parsed = JSON.parse(storedChats);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setChats(parsed);
+          } else {
+            setChats(DEFAULT_CHATS);
+          }
+        } else {
+          setChats(DEFAULT_CHATS);
         }
+      } catch (e) {}
+
+      try {
+        const storedUserId = await AsyncStorage.getItem('userId');
         if (storedUserId) {
           activeUid = storedUserId;
           setCurrentUserId(storedUserId);
@@ -371,10 +703,18 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
       } catch (e) {
         console.error('Failed to load profile', e);
       }
-      await fetchTournaments();
-      await fetchGlobalData(activeUid);
-      await fetchMyMatches();
-      setIsAppLoading(false);
+      const withTimeout = (p: Promise<any>, ms = 2500) =>
+        Promise.race([p, new Promise(res => setTimeout(() => res(null), ms))]);
+
+      try {
+        await withTimeout(fetchTournaments(), 2000);
+        await withTimeout(fetchGlobalData(activeUid), 2000);
+        await withTimeout(fetchMyMatches(), 2000);
+      } catch (err) {
+        console.log('Initial fetch network error:', err);
+      } finally {
+        setIsAppLoading(false);
+      }
     };
     loadInitialData();
   }, []);
@@ -466,6 +806,10 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
       chats,
       addMultipleChats,
       toggleFavoriteChat,
+      updateChatDetails,
+      inAppNotification,
+      notifyNewMessage,
+      dismissNotification,
       userProfile,
       currentUserId,
       setUserProfile,
@@ -476,6 +820,18 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
       isAppLoading,
         isDrawerOpen,
         setIsDrawerOpen,
+        markChatAsRead,
+        appNotifications,
+        unreadNotificationCount,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
+        addAppNotification,
+        supportedUserIds,
+        toggleSupportUser,
+        aiTranslateEnabled,
+        setAiTranslateEnabled,
+        userTargetLanguage,
+        setUserTargetLanguage,
       }}>
       {children}
     </AppContext.Provider>

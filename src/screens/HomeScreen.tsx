@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { colors } from '../theme/colors';
+import { formatSocialHandle } from '../utils/socialUtils';
 import { AppContext } from '../context/AppContext';
 import { apiService } from '../api/index';
 import { MEDIA_URL } from '../api/config';
@@ -51,6 +52,66 @@ const HomeScreen = ({ route, navigation }: any) => {
     return () => clearInterval(timer);
   }, [currentSlide, width, carouselItems.length]);
 
+  
+  
+  const parseCustomDate = (dateVal: any): number | null => {
+    if (!dateVal) return null;
+    if (typeof dateVal === 'number') return dateVal;
+    const str = String(dateVal).trim();
+    if (!str) return null;
+
+    const std = Date.parse(str);
+    if (!isNaN(std)) return std;
+
+    const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+    if (dmyMatch) {
+      const day = parseInt(dmyMatch[1], 10);
+      const month = parseInt(dmyMatch[2], 10) - 1;
+      const year = parseInt(dmyMatch[3], 10);
+      const d = new Date(year, month, day, 23, 59, 59);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+
+    const dmyShortMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2})$/);
+    if (dmyShortMatch) {
+      const day = parseInt(dmyShortMatch[1], 10);
+      const month = parseInt(dmyShortMatch[2], 10) - 1;
+      const year = 2000 + parseInt(dmyShortMatch[3], 10);
+      const d = new Date(year, month, day, 23, 59, 59);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+
+    const monthNames: Record<string, number> = {
+      jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+      may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8,
+      september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
+    };
+    const textDateMatch = str.match(/(\d{1,2})(?:st|nd|rd|th)?\s*[-/,\s]\s*([A-Za-z]+)(?:\s*[-/,\s]\s*(\d{2,4}))?/i);
+    if (textDateMatch) {
+      const day = parseInt(textDateMatch[1], 10);
+      const monStr = textDateMatch[2].toLowerCase();
+      const mon = monthNames[monStr];
+      if (mon !== undefined) {
+        const year = textDateMatch[3] 
+          ? parseInt(textDateMatch[3].length === 2 ? '20' + textDateMatch[3] : textDateMatch[3], 10)
+          : new Date().getFullYear();
+        const d = new Date(year, mon, day, 23, 59, 59);
+        if (!isNaN(d.getTime())) return d.getTime();
+      }
+    }
+
+    return null;
+  };
+
+  const getSocialDisplay = (val: string, prefix = '') => {
+    if (!val) return '';
+    const network = /youtube|youtu\.be/i.test(val) ? 'youtube' : /discord/i.test(val) ? 'discord' : 'instagram';
+    let handle = formatSocialHandle(network, val, prefix === '@');
+    if (prefix && prefix === '@' && !handle.startsWith('@')) handle = '@' + handle;
+    if (handle.length > 20) handle = handle.substring(0, 18) + '...';
+    return handle;
+  };
+
   const handleSocialLink = (platform: string, link: string) => {
     if (!link) return;
     let url = link.trim();
@@ -65,19 +126,43 @@ const HomeScreen = ({ route, navigation }: any) => {
     Linking.openURL(url).catch(() => Alert.alert('Social Link', `${platform}: ${link}`));
   };
 
-  const getStatusConfig = (st?: string) => {
-    const s = (st || 'Active').toLowerCase();
-    if (s === 'live' || s === 'running') {
-      return { label: 'LIVE', bg: '#E51025', showDot: true };
-    }
-    if (s === 'completed' || s === 'closed' || s === 'finished' || s === 'ended') {
+  const getStatusConfig = (tournament?: any) => {
+    const rawStatus = String(tournament?.status || '').toLowerCase().trim();
+    if (rawStatus === 'completed' || rawStatus === 'closed' || rawStatus === 'finished' || rawStatus === 'ended') {
       return { label: 'CLOSED', bg: '#4B5563', showDot: false };
     }
+
+    const now = Date.now();
+    const endDateStr = tournament?.regEndDate || tournament?.registration_end_date || tournament?.time;
+    const startDateStr = tournament?.regStartDate || tournament?.registration_start_date;
+
+    const parsedEnd = parseCustomDate(endDateStr);
+    if (parsedEnd && now > parsedEnd) {
+      return { label: 'CLOSED', bg: '#4B5563', showDot: false };
+    }
+
+    const parsedStart = parseCustomDate(startDateStr);
+    if (parsedStart && now < parsedStart) {
+      return { label: 'UPCOMING', bg: '#16A34A', showDot: true };
+    }
+
+    if (rawStatus === 'live' || rawStatus === 'running' || rawStatus === 'active') {
+      return { label: 'LIVE', bg: '#E51025', showDot: true };
+    }
+
+    if (rawStatus === 'upcoming' || rawStatus === 'open') {
+      return { label: 'UPCOMING', bg: '#16A34A', showDot: true };
+    }
+
+    if (parsedStart && parsedEnd && now >= parsedStart && now <= parsedEnd) {
+      return { label: 'LIVE', bg: '#E51025', showDot: true };
+    }
+
     return { label: 'UPCOMING', bg: '#16A34A', showDot: true };
   };
 
   const renderTournamentCard = ({ item: tournament }: any) => {
-    const statusCfg = getStatusConfig(tournament.status);
+    const statusCfg = getStatusConfig(tournament);
     const totalSlots = tournament.totalSlots || tournament.teamsLimit || '100';
     const isFree = !tournament.entryFee || tournament.entryFee === '0' || tournament.entryFee.toLowerCase?.() === 'free';
 
@@ -92,7 +177,7 @@ const HomeScreen = ({ route, navigation }: any) => {
           <View style={styles.bannerContainer}>
             <Image
               source={typeof tournament.bannerImage === 'string' ? { uri: tournament.bannerImage } : tournament.bannerImage}
-              style={[styles.cardBanner, { aspectRatio: imageAspectRatios[tournament.id] || 16 / 9 }]}
+              style={styles.cardBanner}
               resizeMode="cover"
               onLoad={(e) => {
                 if (e.nativeEvent.source) {
@@ -109,18 +194,6 @@ const HomeScreen = ({ route, navigation }: any) => {
 
         {/* TOP BADGES ROW */}
         <View style={styles.cardTopRow}>
-          <View style={styles.cardBadge}>
-            <Text style={styles.cardBadgeText}>{tournament.game || 'BGMI'}</Text>
-          </View>
-
-          {/* FREE / PAID SLOTS BADGE */}
-          <View style={[styles.entryBadge, { backgroundColor: isFree ? '#DCFCE7' : '#FEF3C7' }]}>
-            <Icon name={isFree ? "gift-outline" : "ticket-outline"} size={12} color={isFree ? '#16A34A' : '#D97706'} style={{ marginRight: 3 }} />
-            <Text style={[styles.entryBadgeText, { color: isFree ? '#16A34A' : '#D97706' }]}>
-              {isFree ? 'FREE SLOTS' : 'PAID SLOTS'}
-            </Text>
-          </View>
-
           {/* DYNAMIC STATUS BADGE */}
           <View style={[styles.statusBadge, { backgroundColor: statusCfg.bg }]}>
             {statusCfg.showDot && <View style={styles.statusDot} />}
@@ -182,7 +255,7 @@ const HomeScreen = ({ route, navigation }: any) => {
           if (!ig && !yt && !dc) return null;
           return (
             <View style={styles.socialMediaRow}>
-              <Text style={styles.socialMediaLabel}>Official Links:</Text>
+              <Text style={styles.socialMediaLabel}>Social Media:</Text>
               <View style={styles.socialBadgesGroup}>
                 {!!ig && (
                   <TouchableOpacity 
@@ -191,7 +264,7 @@ const HomeScreen = ({ route, navigation }: any) => {
                     activeOpacity={0.7}
                   >
                     <Icon name="logo-instagram" size={13} color="#E1306C" style={{ marginRight: 4 }} />
-                    <Text style={[styles.socialPillText, { color: '#E1306C' }]}>Instagram</Text>
+                    <Text style={[styles.socialPillText, { color: '#E1306C' }]}>{getSocialDisplay(ig, '@') || '@stg_esports'}</Text>
                   </TouchableOpacity>
                 )}
                 {!!yt && (
@@ -201,7 +274,7 @@ const HomeScreen = ({ route, navigation }: any) => {
                     activeOpacity={0.7}
                   >
                     <Icon name="logo-youtube" size={13} color="#FF0000" style={{ marginRight: 4 }} />
-                    <Text style={[styles.socialPillText, { color: '#FF0000' }]}>YouTube</Text>
+                    <Text style={[styles.socialPillText, { color: '#FF0000' }]}>{getSocialDisplay(yt) || 'STG Esports Live'}</Text>
                   </TouchableOpacity>
                 )}
                 {!!dc && (
@@ -211,7 +284,7 @@ const HomeScreen = ({ route, navigation }: any) => {
                     activeOpacity={0.7}
                   >
                     <Icon name="logo-discord" size={13} color="#5865F2" style={{ marginRight: 4 }} />
-                    <Text style={[styles.socialPillText, { color: '#5865F2' }]}>Discord</Text>
+                    <Text style={[styles.socialPillText, { color: '#5865F2' }]}>{getSocialDisplay(dc) || 'Discord'}</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -234,7 +307,14 @@ const HomeScreen = ({ route, navigation }: any) => {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F4F5F7' }}>
-      <ScrollView showsVerticalScrollIndicator={false} stickyHeaderIndices={[1]}>
+      <ScrollView 
+        showsVerticalScrollIndicator={false} 
+        nestedScrollEnabled={true}
+        scrollEventThrottle={16}
+        decelerationRate="normal"
+        overScrollMode="always"
+        contentContainerStyle={{ paddingBottom: 180 }}
+      >
         
         {/* CAROUSEL */}
         <View>
@@ -285,31 +365,10 @@ const HomeScreen = ({ route, navigation }: any) => {
         </View>
 
         {/* STICKY SEGMENTED TABS */}
-        <View style={styles.tabContainerWrapper}>
-          <View style={styles.tabContainer}>
-            <TouchableOpacity
-              style={[styles.tabBtn, activeTab === 'foryou' && styles.tabBtnActive]}
-              onPress={() => setActiveTab('foryou')}
-            >
-              <Text style={[styles.tabText, activeTab === 'foryou' && styles.tabTextActive]}>For You</Text>
-              {activeTab === 'foryou' && <View style={styles.tabDot} />}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.tabBtn, activeTab === 'proclub' && styles.tabBtnActive]}
-              onPress={() => setActiveTab('proclub')}
-            >
-              <Text style={[styles.tabText, activeTab === 'proclub' && styles.tabTextActive]}>PRO Club</Text>
-              <View style={styles.newBadge}>
-                <Text style={styles.newBadgeText}>NEW</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
+        {/* PRO CLUB REMOVED - ONLY FOR YOU */}
 
         {/* TAB CONTENTS */}
-        {activeTab === 'foryou' ? (
-          <>
+        <View style={{ width: '100%' }}>
             {/* Tournaments near you */}
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Tournaments near you</Text>
@@ -319,15 +378,13 @@ const HomeScreen = ({ route, navigation }: any) => {
             </View>
 
             {globalTournaments.length > 0 ? (
-              <FlatList
-                data={globalTournaments}
-                renderItem={renderTournamentCard}
-                keyExtractor={(item) => item.id}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: 20 }}
-                ItemSeparatorComponent={() => <View style={{ height: 16 }} />}
-                scrollEnabled={false}
-              />
+              <View style={{ paddingHorizontal: 15 }}>
+                {globalTournaments.map((tournament: any, idx: number) => (
+                  <View key={tournament.id || idx} style={{ marginBottom: 16 }}>
+                    {renderTournamentCard({ item: tournament })}
+                  </View>
+                ))}
+              </View>
             ) : (
               <View style={styles.emptyCard}>
                 <Icon name="trophy-outline" size={40} color="#D1D5DB" />
@@ -336,37 +393,7 @@ const HomeScreen = ({ route, navigation }: any) => {
             )}
 
             <View style={{ height: 30 }} />
-          </>
-                ) : (
-          /* PRO CLUB COMING SOON STATIC POSTER */
-          <View style={styles.proComingSoonContainer}>
-            <View style={styles.proPosterCard}>
-              <View style={styles.proIconCircle}>
-                <Icon name="shield-checkmark" size={44} color="#E51025" />
-              </View>
-
-              <View style={styles.proTagBadge}>
-                <View style={styles.proTagDot} />
-                <Text style={styles.proTagText}>UPMI EXCLUSIVE</Text>
-              </View>
-
-              <Text style={styles.proBrandTitle}>PRO CLUB</Text>
-              
-              <View style={styles.proDivider} />
-
-              <Text style={styles.proComingSoonText}>COMING SOON</Text>
-              
-              <Text style={styles.proSubtitle}>
-                Exclusive Tier 1 Scrims, Verified Tournaments & Esports Pass
-              </Text>
-
-              <View style={styles.proFooterNote}>
-                <Icon name="sparkles" size={15} color="#F59E0B" style={{ marginRight: 6 }} />
-                <Text style={styles.proFooterNoteText}>Launching Soon • Stay Tuned</Text>
-              </View>
-            </View>
-          </View>
-        )}
+        </View>
 
 </ScrollView>
     </View>
@@ -417,8 +444,8 @@ const styles = StyleSheet.create({
     elevation: 4,
     width: '100%'
   },
-  bannerContainer: { width: '100%', borderRadius: 14, overflow: 'hidden', marginBottom: 12 },
-  cardBanner: { width: '100%', minHeight: 160 },
+  bannerContainer: { width: '100%', height: 160, borderRadius: 14, overflow: 'hidden', marginBottom: 12 },
+  cardBanner: { width: '100%', height: '100%' },
   
   cardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   cardBadge: { backgroundColor: '#FEF2F2', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, borderWidth: 1, borderColor: '#FEE2E2' },

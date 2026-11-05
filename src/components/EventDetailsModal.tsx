@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import SafeImagePicker from '../utils/SafeImagePicker';
+import { formatSocialHandle } from '../utils/socialUtils';
 
 export interface EventDetailsData {
   eventLogo: string | null;
@@ -117,12 +118,18 @@ const EventDetailsModal: React.FC<EventDetailsModalProps> = ({
   };
 
   const handleSave = () => {
+    const cleanSocials = {
+      instagram: formatSocialHandle('instagram', socials.instagram),
+      youtube: formatSocialHandle('youtube', socials.youtube),
+      discord: formatSocialHandle('discord', socials.discord),
+      website: formatSocialHandle('website', socials.website || ''),
+    };
     const updatedData: EventDetailsData = {
       eventLogo,
       eventName: eventName.trim(),
       organiserName: organiserName.trim(),
       subName: subName.trim(),
-      socials
+      socials: cleanSocials
     };
     onUpdate(updatedData);
     onClose();

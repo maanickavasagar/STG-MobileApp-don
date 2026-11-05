@@ -97,18 +97,7 @@ const TournamentConfirmationScreen = ({ route, navigation }: any) => {
         } else {
           addTournament({ ...finalTournament, id: tournamentId });
           
-          // Auto-fetch/add generated inbox groups from backend
-          if (responseData?.inbox_groups && Array.isArray(responseData.inbox_groups)) {
-             const newChats = responseData.inbox_groups.map((grp: any) => ({
-                id: grp.id || `grp_${Date.now()}_${Math.random()}`,
-                name: grp.name || 'Tournament Group',
-                lastMessage: 'Group created automatically',
-                time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-                unread: 0,
-                isGroup: true
-             }));
-             addMultipleChats(newChats);
-          }
+          // Auto-fetch inbox groups removed per user request
           
           Alert.alert('Success', 'Tournament created successfully!');
         }

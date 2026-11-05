@@ -1,4 +1,5 @@
-﻿import React, { useState, useContext, useCallback } from 'react';
+import React, { useState, useContext, useCallback, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList, Image, StatusBar, TextInput, Modal, ScrollView, Alert, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -9,8 +10,31 @@ import { apiService } from '../api/index';
 const InboxScreen = () => {
   const navigation = useNavigation<any>();
 
-  const { chats, addMultipleChats, userProfile, currentUserId } = useContext(AppContext);
+  const { chats, addMultipleChats, userProfile, currentUserId, markChatAsRead } = useContext(AppContext);
   const [activeTab, setActiveTab] = useState<string>('Chats');
+
+  const [userCreatedGroupIds, setUserCreatedGroupIds] = useState<string[]>([]);
+
+  const loadLocalGroupIds = async () => {
+    try {
+      const res = await AsyncStorage.getItem('user_created_group_ids');
+      if (res) {
+        setUserCreatedGroupIds(JSON.parse(res));
+      }
+      const persisted = await AsyncStorage.getItem('@persisted_chats');
+      if (persisted) {
+        const parsed = JSON.parse(persisted);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          addMultipleChats(parsed);
+        }
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    loadLocalGroupIds();
+  }, []);
+
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const fetchInboxData = async () => {
@@ -27,6 +51,7 @@ const InboxScreen = () => {
 
   useFocusEffect(
     useCallback(() => {
+      loadLocalGroupIds();
       fetchInboxData();
     }, [currentUserId, userProfile?.id])
   );
@@ -34,12 +59,36 @@ const InboxScreen = () => {
   const [isCustomizeVisible, setCustomizeVisible] = useState(false);
   const [newListName, setNewListName] = useState('');
 
-  // Filter chats based on tab
+  const [chatSearchText, setChatSearchText] = useState('');
+
+  // Filter and sort chats based on tab, search query, and timing
   const getFilteredChats = () => {
-    if (activeTab === 'Groups') return chats.filter(c => c.isGroup);
-    if (activeTab === 'Favorites') return chats.filter(c => c.isFavorite);
-    if (customLists.includes(activeTab)) return []; // Dummy empty list for custom lists
-    return chats.filter(c => !c.isGroup);
+    let list = chats;
+    if (activeTab === 'Groups') {
+      list = chats.filter(c => c.isGroup);
+    } else if (activeTab === 'Favorites') {
+      list = chats.filter(c => c.isFavorite);
+    } else if (customLists.includes(activeTab)) {
+      list = [];
+    } else {
+      list = chats.filter(c => !c.isGroup);
+    }
+
+    if (chatSearchText.trim().length > 0) {
+      const q = chatSearchText.trim().toLowerCase();
+      list = list.filter(c =>
+        (c.name && c.name.toLowerCase().includes(q)) ||
+        (c.lastMessage && c.lastMessage.toLowerCase().includes(q)) ||
+        (c.tournamentName && c.tournamentName.toLowerCase().includes(q)) ||
+        (c.stageName && c.stageName.toLowerCase().includes(q))
+      );
+    }
+
+    return [...list].sort((a: any, b: any) => {
+      const timeA = a.updatedAt || a.createdAt || a.timestamp || 0;
+      const timeB = b.updatedAt || b.createdAt || b.timestamp || 0;
+      return timeB - timeA;
+    });
   };
 
   const filteredChatList = getFilteredChats();
@@ -63,7 +112,10 @@ const InboxScreen = () => {
     <TouchableOpacity 
       style={styles.chatItem}
       activeOpacity={0.7}
-      onPress={() => navigation.navigate('ChatScreen', { userId: item.id, userName: item.name, isGroup: item.isGroup, isCreator: false })}
+      onPress={() => {
+        if (markChatAsRead) markChatAsRead(item.id);
+        navigation.navigate('ChatScreen', { userId: item.id, userName: item.name, isGroup: item.isGroup, isCreator: false });
+      }}
       onLongPress={() => handleDeleteChat(item.id, item.name)}
     >
       <View style={styles.avatarContainer}>
@@ -105,13 +157,118 @@ const InboxScreen = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
 
-  const dummyUsers = [
-    { id: '101', name: 'Rakesh Kumar', username: '@rakesh_op', avatar: 'https://i.pravatar.cc/150?u=101' },
-    { id: '102', name: 'Sneha Reddy', username: '@sneha_gaming', avatar: 'https://i.pravatar.cc/150?u=102' },
-    { id: '103', name: 'Vikram Singh', username: '@vikram_UPMI', avatar: 'https://i.pravatar.cc/150?u=103' },
-    { id: '104', name: 'Priya Sharma', username: '@priya_play', avatar: 'https://i.pravatar.cc/150?u=104' },
-    { id: '105', name: 'Arjun Das', username: '@arjun_esports', avatar: 'https://i.pravatar.cc/150?u=105' },
-  ];
+  interface SearchUser {
+    id: string;
+    name: string;
+    username: string;
+    avatar: string;
+  }
+
+  const [registeredUsers, setRegisteredUsers] = useState<SearchUser[]>([]);
+
+  useEffect(() => {
+    AsyncStorage.getItem('@app_registered_users_cache').then(cached => {
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setRegisteredUsers(parsed);
+          }
+        } catch {}
+      }
+    });
+    syncAllUsers();
+  }, []);
+
+  const syncAllUsers = async () => {
+    try {
+      const userMap = new Map<string, SearchUser>();
+
+      registeredUsers.forEach(u => userMap.set(u.id, u));
+
+      const uid = (userProfile?.id || currentUserId || '1').toString().replace('user_', '');
+      const inboxData = await apiService.getInbox(uid).catch(() => null);
+      if (Array.isArray(inboxData)) {
+        inboxData.forEach((c: any) => {
+          const cid = String(c.userId || c.id || '').replace('user_', '').trim();
+          if (cid && !c.isGroup) {
+            const rawUser = (c.username || c.name || `user_${cid}`).trim();
+            const formattedUser = rawUser.startsWith('@') ? rawUser : '@' + rawUser;
+            userMap.set(cid, {
+              id: cid,
+              name: c.name || rawUser,
+              username: formattedUser,
+              avatar: c.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(c.name || rawUser)}&background=E51025&color=fff`,
+            });
+          }
+        });
+      }
+
+      const feedData = await apiService.getLookingFeed().catch(() => null);
+      const posts = feedData?.data || (Array.isArray(feedData) ? feedData : []);
+      if (Array.isArray(posts)) {
+        posts.forEach((p: any) => {
+          const pUid = String(p.user_id || '').replace('user_', '').trim();
+          if (pUid) {
+            const rawUser = (p.creator_username || p.name || `user_${pUid}`).trim();
+            const formattedUser = rawUser.startsWith('@') ? rawUser : '@' + rawUser;
+            const existing = userMap.get(pUid);
+            userMap.set(pUid, {
+              id: pUid,
+              name: existing?.name || p.name || p.player_name || rawUser,
+              username: formattedUser,
+              avatar: p.creator_avatar || existing?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(rawUser)}&background=E51025&color=fff`,
+            });
+          }
+        });
+      }
+
+      const profileIds = Array.from({ length: 15 }, (_, i) => String(i + 1));
+      await Promise.all(
+        profileIds.map(async pid => {
+          try {
+            const pRes = await apiService.getProfile(pid);
+            if (pRes?.status && pRes?.data) {
+              const d = pRes.data;
+              const rawUser = (d.username || '').trim();
+              const formattedUser = rawUser ? (rawUser.startsWith('@') ? rawUser : '@' + rawUser) : `@user_${pid}`;
+              const fullName = (d.fullName || d.name || rawUser || `User ${pid}`).trim();
+              const avatar = d.profilePicture || `https://ui-avatars.com/api/?name=${encodeURIComponent(fullName)}&background=E51025&color=fff`;
+              userMap.set(pid, {
+                id: pid,
+                name: fullName,
+                username: formattedUser,
+                avatar,
+              });
+            }
+          } catch {}
+        })
+      );
+
+      const allUsers = Array.from(userMap.values());
+      if (allUsers.length > 0) {
+        setRegisteredUsers(allUsers);
+        AsyncStorage.setItem('@app_registered_users_cache', JSON.stringify(allUsers));
+      }
+    } catch (e) {
+      console.log('Error syncing registered users:', e);
+    }
+  };
+
+  const myCleanId = (userProfile?.id || currentUserId || '').toString().replace('user_', '').trim();
+  const myCleanUsername = (userProfile?.username || '').toString().toLowerCase().replace('@', '').trim();
+
+  const cleanQuery = searchQuery.trim().toLowerCase().replace('@', '');
+  const filteredUsers = registeredUsers.filter(u => {
+    const cleanId = u.id.replace('user_', '').trim();
+    const cleanUName = (u.username || '').toLowerCase().replace('@', '').trim();
+    if (myCleanId && cleanId === myCleanId) return false;
+    if (myCleanUsername && cleanUName === myCleanUsername) return false;
+
+    if (!cleanQuery) return true;
+    const cleanName = (u.name || '').toLowerCase();
+    return cleanUName.includes(cleanQuery) || cleanName.includes(cleanQuery);
+  });
 
   const toggleUserSelection = (userId: string) => {
     setSelectedUsers(prev => 
@@ -130,13 +287,18 @@ const InboxScreen = () => {
       { id: 'me', name: 'You', avatar: 'https://i.pravatar.cc/150?u=me', role: 'super_admin' }
     ];
     selectedUsers.forEach(uid => {
-      const u = dummyUsers.find(du => du.id === uid);
+      const u = registeredUsers.find(du => du.id === uid);
       if (u) {
         members.push({ id: u.id, name: u.name, avatar: u.avatar, role: 'member' });
       }
     });
 
+    const updatedIds = [...userCreatedGroupIds, newChatId];
+    setUserCreatedGroupIds(updatedIds);
+    AsyncStorage.setItem('user_created_group_ids', JSON.stringify(updatedIds));
+
     const newGroupObj = {
+      isUserCreated: true,
       id: newChatId,
       name: finalName,
       lastMessage: 'Group created.',
@@ -167,6 +329,7 @@ const InboxScreen = () => {
   };
 
   const handleHeaderEditPress = () => {
+    syncAllUsers();
     setCreateGroupStep(1);
     setSearchQuery('');
     setSelectedUsers([]);
@@ -195,42 +358,77 @@ const InboxScreen = () => {
           <Icon name="search" size={20} color="#9CA3AF" />
           <TextInput 
             style={styles.searchInput}
-            placeholder="Search messages..."
+            placeholder="Search messages, groups..."
             placeholderTextColor="#9CA3AF"
+            value={chatSearchText}
+            onChangeText={setChatSearchText}
           />
+          {chatSearchText.length > 0 && (
+            <TouchableOpacity onPress={() => setChatSearchText('')} style={{ padding: 4 }}>
+              <Icon name="close-circle" size={18} color="#9CA3AF" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
       {/* Tabs */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', paddingHorizontal: 20, marginBottom: 10, flexGrow: 0 }} contentContainerStyle={{ paddingRight: 40 }}>
-        {['Chats', 'Groups', 'Favorites', ...customLists].map(tab => (
+      <View style={{ minHeight: 52, paddingVertical: 4, marginBottom: 10 }}>
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false} 
+          contentContainerStyle={{ paddingHorizontal: 16, alignItems: 'center' }}
+        >
+          {['Chats', 'Groups', 'Favorites', ...customLists].map(tab => (
+            <TouchableOpacity 
+              key={tab} 
+              onPress={() => setActiveTab(tab)}
+              style={{ 
+                marginRight: 10, 
+                paddingVertical: 9, 
+                paddingHorizontal: 18, 
+                borderRadius: 22, 
+                backgroundColor: activeTab === tab ? '#E51025' : '#F3F4F6',
+                justifyContent: 'center',
+                alignItems: 'center',
+                minHeight: 40
+              }}>
+              <Text style={{ 
+                color: activeTab === tab ? '#FFFFFF' : '#4B5563', 
+                fontWeight: '700', 
+                fontSize: 14,
+                lineHeight: 20,
+                textAlignVertical: 'center'
+              }}>
+                {tab}
+              </Text>
+            </TouchableOpacity>
+          ))}
           <TouchableOpacity 
-            key={tab} 
-            onPress={() => setActiveTab(tab)}
-            style={{ 
-              marginRight: 15, 
-              paddingVertical: 6, 
-              paddingHorizontal: 16, 
-              borderRadius: 20, 
-              backgroundColor: activeTab === tab ? '#E51025' : '#F3F4F6' 
-            }}>
-            <Text style={{ color: activeTab === tab ? '#FFFFFF' : '#4B5563', fontWeight: 'bold' }}>{tab}</Text>
-          </TouchableOpacity>
-        ))}
-        <TouchableOpacity 
             onPress={() => setCustomizeVisible(true)}
             style={{ 
-              paddingVertical: 6, 
-              paddingHorizontal: 12, 
-              borderRadius: 20, 
+              paddingVertical: 9, 
+              paddingHorizontal: 16, 
+              borderRadius: 22, 
               backgroundColor: '#F3F4F6',
               flexDirection: 'row',
-              alignItems: 'center'
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: 40
             }}>
             <Icon name="add" size={16} color="#4B5563" />
-            <Text style={{ color: '#4B5563', fontWeight: 'bold', marginLeft: 4 }}>Customize</Text>
+            <Text style={{ 
+              color: '#4B5563', 
+              fontWeight: '700', 
+              fontSize: 13, 
+              marginLeft: 4,
+              lineHeight: 20,
+              textAlignVertical: 'center' 
+            }}>
+              Customize
+            </Text>
           </TouchableOpacity>
-      </ScrollView>
+        </ScrollView>
+      </View>
 
       {/* Chat List */}
       <FlatList
@@ -239,6 +437,27 @@ const InboxScreen = () => {
         renderItem={renderChatItem}
         contentContainerStyle={styles.listContainer}
         showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <View style={{ alignItems: 'center', justifyContent: 'center', paddingTop: 60, paddingHorizontal: 30 }}>
+            <Icon 
+              name={activeTab === 'Groups' ? 'people-outline' : activeTab === 'Favorites' ? 'heart-outline' : 'chatbubbles-outline'} 
+              size={48} 
+              color="#9CA3AF" 
+            />
+            <Text style={{ fontSize: 17, fontWeight: '700', color: '#374151', marginTop: 14 }}>
+              {activeTab === 'Groups' 
+                ? 'No Groups Yet' 
+                : activeTab === 'Favorites' 
+                ? 'No Favorite Chats' 
+                : 'No Messages Yet'}
+            </Text>
+            <Text style={{ fontSize: 13, color: '#6B7280', textAlign: 'center', marginTop: 6, lineHeight: 18 }}>
+              {activeTab === 'Groups'
+                ? 'Tap the edit icon at the top right to create a new group.'
+                : 'Your messages will appear here.'}
+            </Text>
+          </View>
+        }
         refreshing={isRefreshing}
         onRefresh={async () => {
           setIsRefreshing(true);
@@ -274,24 +493,43 @@ const InboxScreen = () => {
                 </View>
 
                 <ScrollView style={{ flex: 1, marginTop: 10 }} showsVerticalScrollIndicator={false}>
-                  <Text style={styles.sectionLabel}>Suggested</Text>
-                  {dummyUsers.filter(u => u.name.toLowerCase().includes(searchQuery.toLowerCase())).map(user => (
-                    <TouchableOpacity 
-                      key={user.id} 
-                      style={styles.userRow}
-                      activeOpacity={0.7}
-                      onPress={() => {
-                        setCreateGroupVisible(false);
-                        navigation.navigate('ChatScreen', { userId: user.id, userName: user.name, isGroup: false, isCreator: false });
-                      }}
-                    >
-                      <Image source={{ uri: user.avatar }} style={styles.userAvatar} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.userName}>{user.name}</Text>
-                        <Text style={styles.userSub}>{user.username}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
+                  <Text style={styles.sectionLabel}>{cleanQuery ? 'Search Results' : 'Suggested'}</Text>
+                  {filteredUsers.length === 0 ? (
+                    <View style={{ alignItems: 'center', marginTop: 30, paddingHorizontal: 20 }}>
+                      <Icon name="search-outline" size={40} color="#9CA3AF" />
+                      <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#374151', marginTop: 10 }}>
+                        No accounts found
+                      </Text>
+                      <Text style={{ fontSize: 12, color: '#9CA3AF', marginTop: 4, textAlign: 'center' }}>
+                        No users matching "{searchQuery}"
+                      </Text>
+                    </View>
+                  ) : (
+                    filteredUsers.map(user => (
+                      <TouchableOpacity 
+                        key={user.id} 
+                        style={styles.userRow}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          setCreateGroupVisible(false);
+                          navigation.navigate('ChatScreen', {
+                            userId: user.id,
+                            userName: user.name,
+                            userAvatar: user.avatar,
+                            username: user.username,
+                            isGroup: false,
+                            isCreator: false
+                          });
+                        }}
+                      >
+                        <Image source={{ uri: user.avatar }} style={styles.userAvatar} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.userName}>{user.name}</Text>
+                          <Text style={styles.userSub}>{user.username}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))
+                  )}
                 </ScrollView>
               </>
             ) : (
@@ -316,8 +554,8 @@ const InboxScreen = () => {
                   </View>
 
                   <ScrollView style={{ flex: 1, marginTop: 10 }} showsVerticalScrollIndicator={false}>
-                    <Text style={styles.sectionLabel}>Suggested</Text>
-                    {dummyUsers.filter(u => u.name.toLowerCase().includes(searchQuery.toLowerCase())).map(user => {
+                    <Text style={styles.sectionLabel}>{cleanQuery ? 'Search Results' : 'Suggested'}</Text>
+                    {filteredUsers.map(user => {
                       const isSelected = selectedUsers.includes(user.id);
                       return (
                         <TouchableOpacity 
